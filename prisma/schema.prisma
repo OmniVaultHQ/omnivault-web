@@ -21,6 +21,7 @@ model User {
   sessions        Session[]
   collections     Collection[]
   collectionItems CollectionItem[]
+  customItems CustomItem[]
 }
 
 model Account {
@@ -121,6 +122,7 @@ model Collection {
 
   user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   items CollectionItem[]
+  customItems CustomItem[]
 
   @@unique([userId, name])
 }
@@ -144,4 +146,21 @@ model CollectionItem {
   @@index([collectionId])
   @@index([cardId])
   @@index([userId])
+}
+model CustomItem {
+  id            String   @id @default(cuid())
+  userId        String
+  collectionId  String
+  name          String
+  game          String?
+  set           String?
+  imageUrl      String?
+  quantity      Int      @default(1)
+  purchasePrice Float?
+  marketPrice   Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
 }

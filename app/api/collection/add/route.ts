@@ -1,46 +1,43 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
+import { getOrCreateDefaultCollection } from "@/lib/collections";
 
 export async function POST(req: Request) {
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const body = await req.json().catch(() => ({}));
-  const cardId = String(body?.cardId ?? "");
-  const quantity = Math.max(1, Number(body?.quantity ?? 1));
-  const collectionId = String(body?.collectionId ?? "");
-
-  if (!cardId) return NextResponse.json({ error: "cardId required" }, { status: 400 });
-
-  // pick a collection (requested or fallback to first)
-  let targetCollectionId = collectionId;
-  if (!targetCollectionId) {
-    const first = await prisma.collection.findFirst({ where: { userId } });
-    if (!first) {
-      const created = await prisma.collection.create({ data: { userId, name: "Main" } });
-      targetCollectionId = created.id;
-    } else {
-      targetCollectionId = first.id;
-    }
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // upsert item in that collection
-  const existing = await prisma.collectionItem.findFirst({
-    where: { collectionId: targetCollectionId, cardId },
+  const userId = session.user.id;
+
+  const body = await req.json();
+  const cardId = String(body.cardId ?? "");
+  const quantity = Number(body.quantity ?? 1);
+
+  if (!cardId) {
+    return NextResponse.json({ error: "Missing cardId" }, { status: 400 });
+  }
+
+  const collectionId = body.collectionId;
+
+  await prisma.collectionItem.upsert({
+    where: {
+      collectionId_cardId: {
+        collectionId: collectionId,
+        cardId,
+      },
+    },
+    create: {
+      userId,
+      collectionId: collectionId,
+      cardId,
+      quantity,
+    },
+    update: {
+      quantity: { increment: quantity },
+    },
   });
-
-  if (existing) {
-    await prisma.collectionItem.update({
-      where: { id: existing.id },
-      data: { quantity: existing.quantity + quantity },
-    });
-  } else {
-    await prisma.collectionItem.create({
-      data: { userId, collectionId: targetCollectionId, cardId, quantity },
-    });
-  }
 
   return NextResponse.json({ ok: true });
 }

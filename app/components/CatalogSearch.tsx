@@ -11,9 +11,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 /*
-Represents one catalog card returned from /api/catalog
+Represents one catalog item returned from /api/catalog
 */
-type CatalogCard = {
+type CatalogItem = {
   id: string;
   name: string;
   game: string;
@@ -22,7 +22,7 @@ type CatalogCard = {
   price: number | null;
   rarity: string | null;
   setCode: string | null;
-  cardNumber: string | null;
+  itemNumber: string | null;
 };
 
 /*
@@ -63,7 +63,7 @@ export default function CatalogSearch({
   items
   Search results returned from the catalog API
   */
-  const [items, setItems] = useState<CatalogCard[]>([]);
+  const [items, setItems] = useState<CatalogItem[]>([]);
 
   /*
   loading
@@ -73,19 +73,19 @@ export default function CatalogSearch({
 
   /*
   collectionId
-  Which collection to add cards into
+  Which collection to add items into
   */
   const [collectionId, setCollectionId] = useState(activeCollectionId);
 
   /*
   router
-  Used to refresh dashboard data after adding a card
+  Used to refresh dashboard data after adding an item
   */
   const router = useRouter();
 
   /*
   statusById
-  Stores button status per card ID
+  Stores button status per item ID
 
   Example:
   {
@@ -157,7 +157,7 @@ export default function CatalogSearch({
   }, [q, canSearch]);
 
   /*
-  ADD CARD TO COLLECTION
+  ADD ITEM TO COLLECTION
 
   Flow:
   1. Mark button as "Adding..."
@@ -166,38 +166,38 @@ export default function CatalogSearch({
   4. Refresh dashboard data
   5. Reset button after short delay
   */
-  async function addToCollection(card: CatalogCard) {
-    setStatusById((prev) => ({ ...prev, [card.id]: "adding" }));
+  async function addToCollection(item: CatalogItem) {
+    setStatusById((prev) => ({ ...prev, [item.id]: "adding" }));
 
     try {
       const res = await fetch("/api/collection/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          cardId: card.id,
+          itemId: item.id,
           quantity: 1,
-          collectionId: collectionId,
+          collectionId,
         }),
       });
 
       if (!res.ok) throw new Error("Failed");
 
       // Success state
-      setStatusById((prev) => ({ ...prev, [card.id]: "added" }));
+      setStatusById((prev) => ({ ...prev, [item.id]: "added" }));
 
-      // Refresh dashboard so the added card appears immediately
+      // Refresh dashboard so the added item appears immediately
       router.refresh();
 
       // Reset button back to idle
       setTimeout(() => {
-        setStatusById((prev) => ({ ...prev, [card.id]: "idle" }));
+        setStatusById((prev) => ({ ...prev, [item.id]: "idle" }));
       }, 650);
     } catch {
       // Error state
-      setStatusById((prev) => ({ ...prev, [card.id]: "error" }));
+      setStatusById((prev) => ({ ...prev, [item.id]: "error" }));
 
       setTimeout(() => {
-        setStatusById((prev) => ({ ...prev, [card.id]: "idle" }));
+        setStatusById((prev) => ({ ...prev, [item.id]: "idle" }));
       }, 900);
     }
   }
@@ -208,11 +208,11 @@ export default function CatalogSearch({
   return (
     <div className="w-full max-w-2xl">
       {/* Section title */}
-      <div className="text-xl font-semibold mb-1">Catalog</div>
+      <div className="mb-1 text-xl font-semibold">Catalog</div>
 
       {/* Section helper text */}
       <div className="mb-3 text-sm text-white/70">
-        Search the card catalog and add cards to your collection.
+        Search the item catalog and add items to your collection.
       </div>
 
       {/* SEARCH INPUT */}
@@ -233,40 +233,35 @@ export default function CatalogSearch({
 
       {/* RESULTS SECTION */}
       <div className="mt-3 space-y-3">
-        {/* Loading message */}
         {loading && <div className="px-1 text-sm text-white/70">Searching…</div>}
 
-        {/* Result count */}
         {canSearch && !loading && items.length > 0 && (
           <div className="px-1 text-xs text-white/40">{items.length} results</div>
         )}
 
-        {/* No results */}
         {canSearch && !loading && items.length === 0 && (
-          <div className="px-1 text-sm text-white/55">No cards found.</div>
+          <div className="px-1 text-sm text-white/55">No items found.</div>
         )}
 
-        {/* RESULT LIST */}
-        {items.map((card) => {
-          const status = statusById[card.id] ?? "idle";
+        {items.map((item) => {
+          const status = statusById[item.id] ?? "idle";
           const disabled = status === "adding" || status === "added";
 
           return (
             <div
-              key={card.id}
+              key={item.id}
               className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 transition hover:bg-white/[0.06]"
             >
               {/* LEFT SIDE
-                  Card image + card info
+                  Item image + item info
               */}
               <div className="flex min-w-0 items-center gap-3">
-                {/* Card image / placeholder */}
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/30 text-[10px] text-white/40">
-                  {card.imageUrl ? (
+                  {item.imageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={card.imageUrl}
-                      alt={card.name}
+                      src={item.imageUrl}
+                      alt={item.name}
                       className="h-full w-full object-cover"
                     />
                   ) : (
@@ -274,13 +269,12 @@ export default function CatalogSearch({
                   )}
                 </div>
 
-                {/* Card text info */}
                 <div className="min-w-0">
-                  <div className="truncate font-medium">{card.name}</div>
+                  <div className="truncate font-medium">{item.name}</div>
 
                   <div className="truncate text-xs text-white/60">
-                    {card.game} • {card.set}
-                    {card.price != null ? ` • $${card.price.toFixed(2)}` : ""}
+                    {item.game} • {item.set}
+                    {item.price != null ? ` • $${item.price.toFixed(2)}` : ""}
                   </div>
                 </div>
               </div>
@@ -289,7 +283,6 @@ export default function CatalogSearch({
                   Collection selector + Add button
               */}
               <div className="ml-4 flex shrink-0 items-center gap-2">
-                {/* Select which collection to add into */}
                 <select
                   value={collectionId}
                   onChange={(e) => setCollectionId(e.target.value)}
@@ -302,9 +295,8 @@ export default function CatalogSearch({
                   ))}
                 </select>
 
-                {/* Add card button */}
                 <button
-                  onClick={() => addToCollection(card)}
+                  onClick={() => addToCollection(item)}
                   disabled={disabled}
                   className="rounded-lg bg-white px-4 py-1.5 text-sm font-semibold text-black transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-70"
                 >

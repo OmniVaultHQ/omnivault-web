@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { getOrCreateDefaultCollection } from "@/lib/collections";
 
-import AddCardForm from "@/app/components/AddCardForm";
+import AddItemForm from "@/app/components/AddItemForm";
 import CatalogSearch from "@/app/components/CatalogSearch";
 import SubmitButton from "@/app/components/Submitbutton";
 import PortfolioChart from "@/app/components/Portfoliochart";
@@ -58,12 +58,12 @@ function normalizeStr(v: unknown) {
 /**
  * Prisma helper type:
  * A collection item plus:
- * - its linked card
- * - newest price record for that card
+ * - its linked item
+ * - newest price record for that item
  */
-type CollectionItemWithCard = Prisma.CollectionItemGetPayload<{
+type CollectionItemWithItem = Prisma.CollectionItemGetPayload<{
   include: {
-    card: {
+    item: {
       include: {
         prices: true;
       };
@@ -178,15 +178,15 @@ export default async function DashboardPage({
   }
 
   /**
-   * Add a custom card to a collection
+   * Add a custom item to a collection
    *
    * Flow:
    * 1. Read form fields
    * 2. Save uploaded image if provided
-   * 3. Reuse or create the custom card
+   * 3. Reuse or create the custom item
    * 4. Add/increment the collection item
    */
-  async function addCard(formData: FormData) {
+  async function addItem(formData: FormData) {
     "use server";
 
     const selectedCollectionId = String(
@@ -233,8 +233,8 @@ export default async function DashboardPage({
       finalImageUrl = `/uploads/${safeFileName}`;
     }
 
-    // Reuse existing custom card if possible
-    let card = await prisma.card.findFirst({
+    // Reuse existing custom item if possible
+    let item = await prisma.item.findFirst({
       where: {
         name,
         set,
@@ -244,19 +244,19 @@ export default async function DashboardPage({
       },
     });
 
-    // If card exists but had no image, update it
-    if (card) {
-      if (finalImageUrl && !card.imageUrl) {
-        card = await prisma.card.update({
-          where: { id: card.id },
+    // If item exists but had no image, update it
+    if (item) {
+      if (finalImageUrl && !item.imageUrl) {
+        item = await prisma.item.update({
+          where: { id: item.id },
           data: {
             imageUrl: finalImageUrl,
           },
         });
       }
     } else {
-      // Otherwise create a brand-new custom card
-      card = await prisma.card.create({
+      // Otherwise create a brand-new custom item
+      item = await prisma.item.create({
         data: {
           name,
           set,
@@ -268,18 +268,18 @@ export default async function DashboardPage({
       });
     }
 
-    // Add card to collection, or increment quantity if already there
+    // Add item to collection, or increment quantity if already there
     await prisma.collectionItem.upsert({
       where: {
-        collectionId_cardId: {
+        collectionId_itemId: {
           collectionId: selectedCollectionId,
-          cardId: card.id,
+          itemId: item.id,
         },
       },
       create: {
         userId,
         collectionId: selectedCollectionId,
-        cardId: card.id,
+        itemId: item.id,
         quantity,
       },
       update: {
@@ -405,7 +405,7 @@ async function updateQuantity(formData: FormData) {
   /**
    * Save or clear manual market price
    * Useful for:
-   * - custom cards
+   * - custom items
    * - manual overrides
    * - cards not in shared pricing yet
    */
@@ -444,11 +444,11 @@ async function updateQuantity(formData: FormData) {
    * Otherwise:
    * - only show items from the selected collection
    */
-  const items: CollectionItemWithCard[] = await prisma.collectionItem.findMany({
+  const items: CollectionItemWithItem[] = await prisma.collectionItem.findMany({
     where: isMainCollection ? { userId } : { collectionId: activeCollectionId },
     orderBy: { id: "desc" },
     include: {
-      card: {
+      item: {
         include: {
           prices: {
             orderBy: { lastUpdated: "desc" },
@@ -464,24 +464,24 @@ async function updateQuantity(formData: FormData) {
   // ==================================================
 
   /**
-   * Helper: latest shared catalog market price for the card
+   * Helper: latest shared catalog market price for the item
    */
-  function getCatalogMarketPrice(item: CollectionItemWithCard) {
-    return item.card.prices?.[0]?.marketPrice ?? null;
+  function getCatalogMarketPrice(item: CollectionItemWithItem) {
+    return item.item.prices?.[0]?.marketPrice ?? null;
   }
 
   /**
    * Helper: manual market price stored on the user's collection item
    * This is the per-user override.
    */
-  function getManualMarketPrice(item: CollectionItemWithCard) {
+  function getManualMarketPrice(item: CollectionItemWithItem) {
     return (item as any).marketPrice ?? null;
   }
 
   /**
    * Helper: what the user originally paid
    */
-  function getPurchasePrice(item: CollectionItemWithCard) {
+  function getPurchasePrice(item: CollectionItemWithItem) {
     return (item as any).purchasePrice ?? null;
   }
 
@@ -491,13 +491,13 @@ async function updateQuantity(formData: FormData) {
    *
    * Priority:
    * 1. manual market price override on the collection item
-   * 2. shared catalog market price on the card
+   * 2. shared catalog market price on the item
    * 3. purchase price fallback
    * 4. zero
    *
    * This makes ALL calculations match the row display.
    */
-  function getEffectiveMarketPrice(item: CollectionItemWithCard) {
+  function getEffectiveMarketPrice(item: CollectionItemWithItem) {
     const manual = getManualMarketPrice(item);
     const catalog = getCatalogMarketPrice(item);
     const purchase = getPurchasePrice(item);
@@ -509,7 +509,7 @@ async function updateQuantity(formData: FormData) {
    * Helper:
    * Total current value for one collection row
    */
-  function getRowMarketTotal(item: CollectionItemWithCard) {
+  function getRowMarketTotal(item: CollectionItemWithItem) {
     return getEffectiveMarketPrice(item) * item.quantity;
   }
 
@@ -517,7 +517,7 @@ async function updateQuantity(formData: FormData) {
    * Helper:
    * Total amount the user paid for one collection row
    */
-  function getRowPurchaseTotal(item: CollectionItemWithCard) {
+  function getRowPurchaseTotal(item: CollectionItemWithItem) {
     return (getPurchasePrice(item) ?? 0) * item.quantity;
   }
 
@@ -525,7 +525,7 @@ async function updateQuantity(formData: FormData) {
    * Helper:
    * Profit/loss for one collection row
    */
-  function getRowProfitLoss(item: CollectionItemWithCard) {
+  function getRowProfitLoss(item: CollectionItemWithItem) {
     const purchase = getPurchasePrice(item);
     if (purchase == null) return null;
 
@@ -536,17 +536,17 @@ async function updateQuantity(formData: FormData) {
    * Build category filter options from the current item list
    */
   const categories = Array.from(
-    new Set(items.map((i) => i.card?.game).filter(Boolean))
+    new Set(items.map((i) => i.item?.game).filter(Boolean))
   ).sort();
 
   /**
    * Apply category + search filtering
    */
   const filtered = items.filter((i) => {
-    if (cat && i.card.game !== cat) return false;
+    if (cat && i.item.game !== cat) return false;
     if (!q) return true;
 
-    const hay = `${i.card.name} ${i.card.set} ${i.card.game}`.toLowerCase();
+    const hay = `${i.item.name} ${i.item.set} ${i.item.game}`.toLowerCase();
     return hay.includes(q.toLowerCase());
   });
 
@@ -567,9 +567,9 @@ async function updateQuantity(formData: FormData) {
       case "value_asc":
         return aTotalValue - bTotalValue;
       case "name_asc":
-        return a.card.name.localeCompare(b.card.name);
+        return a.item.name.localeCompare(b.item.name);
       case "name_desc":
-        return b.card.name.localeCompare(a.card.name);
+        return b.item.name.localeCompare(a.item.name);
       case "qty_desc":
         return b.quantity - a.quantity;
       case "qty_asc":
@@ -594,7 +594,7 @@ async function updateQuantity(formData: FormData) {
 
   /**
    * Collection value:
-   * Uses the same effective market logic as row cards
+   * Uses the same effective market logic as row items
    */
   const collectionValue = items.reduce((sum, i) => {
     return sum + getRowMarketTotal(i);
@@ -625,14 +625,14 @@ async function updateQuantity(formData: FormData) {
 
           if (!best) {
             return {
-              name: item.card.name,
+              name: item.item.name,
               totalValue,
             };
           }
 
           return totalValue > best.totalValue
             ? {
-                name: item.card.name,
+                name: item.item.name,
                 totalValue,
               }
             : best;
@@ -648,7 +648,7 @@ async function updateQuantity(formData: FormData) {
 
       return {
         id: item.id,
-        name: item.card.name,
+        name: item.item.name,
         quantity: item.quantity,
         displayPrice,
         totalValue,
@@ -678,7 +678,7 @@ async function updateQuantity(formData: FormData) {
 
     return {
       id: item.id,
-      name: item.card.name,
+      name: item.item.name,
       change,
     };
   });
@@ -704,12 +704,12 @@ async function updateQuantity(formData: FormData) {
 
   // Get all unique set names in the current collection
   const uniqueSetsInCollection = Array.from(
-    new Set(items.map((item) => item.card.set).filter(Boolean))
+    new Set(items.map((item) => item.item.set).filter(Boolean))
   );
 
   // Get all unique game names in the current collection
   const uniqueGamesInCollection = Array.from(
-    new Set(items.map((item) => item.card.game).filter(Boolean))
+    new Set(items.map((item) => item.item.game).filter(Boolean))
   );
 
   // Only track completion when:
@@ -727,39 +727,39 @@ async function updateQuantity(formData: FormData) {
     ? uniqueGamesInCollection[0]
     : null;
 
-  // Count how many UNIQUE cards the user owns in this set
-  const ownedUniqueSetCards = canShowSetCompletion
+  // Count how many UNIQUE items the user owns in this set
+  const ownedUniqueSetItems = canShowSetCompletion
     ? new Set(
         items
           .filter(
             (item) =>
-              item.card.set === trackedSetName &&
-              item.card.game === trackedGameName
+              item.item.set === trackedSetName &&
+              item.item.game === trackedGameName
           )
-          .map((item) => item.card.id)
+          .map((item) => item.item.id)
       ).size
     : 0;
 
   // Build list of owned card IDs so we can find missing ones
-  const ownedTrackedCardIds =
+  const ownedTrackedItemIds =
     canShowSetCompletion && trackedSetName && trackedGameName
       ? Array.from(
           new Set(
             items
               .filter(
                 (item) =>
-                  item.card.set === trackedSetName &&
-                  item.card.game === trackedGameName
+                  item.item.set === trackedSetName &&
+                  item.item.game === trackedGameName
               )
-              .map((item) => item.card.id)
+              .map((item) => item.item.id)
           )
         )
       : [];
 
   // Count how many total cards exist in this set in the catalog
-  const totalCardsInTrackedSet =
+  const totalItemsInTrackedSet =
     canShowSetCompletion && trackedSetName && trackedGameName
-      ? await prisma.card.count({
+      ? await prisma.item.count({
           where: {
             set: trackedSetName,
             game: trackedGameName,
@@ -769,21 +769,21 @@ async function updateQuantity(formData: FormData) {
 
   // Completion percentage
   const setCompletionPercent =
-    totalCardsInTrackedSet > 0
-      ? Math.round((ownedUniqueSetCards / totalCardsInTrackedSet) * 100)
+    totalItemsInTrackedSet > 0
+      ? Math.round((ownedUniqueSetItems / totalItemsInTrackedSet) * 100)
       : 0;
 
-  // Find a few missing cards from the catalog
-  const missingCards =
+  // Find a few missing items from the catalog
+  const missingItems =
     canShowSetCompletion && trackedSetName && trackedGameName
-      ? await prisma.card.findMany({
+      ? await prisma.item.findMany({
           where: {
             set: trackedSetName,
             game: trackedGameName,
             id: {
               notIn:
-                ownedTrackedCardIds.length > 0
-                  ? ownedTrackedCardIds
+                ownedTrackedItemIds.length > 0
+                  ? ownedTrackedItemIds
                   : ["__none__"],
             },
           },
@@ -893,10 +893,10 @@ async function updateQuantity(formData: FormData) {
             MANUAL ADD CARD FORM
            ========================================= */}
         <div className="mt-8">
-          <h2 className="text-lg font-semibold">Add Card</h2>
+          <h2 className="text-lg font-semibold">Add Item</h2>
           <div className="mt-3">
-            <AddCardForm
-              action={addCard}
+            <AddItemForm
+              action={addItem}
               collections={collections}
               activeCollectionId={activeCollectionId}
             />
@@ -963,7 +963,7 @@ async function updateQuantity(formData: FormData) {
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5 shadow-sm">
             <div className="text-[11px] uppercase tracking-wide text-white/60">
-              Most Valuable Card
+              Most Valuable Item
             </div>
             <div className="mt-2 line-clamp-2 text-sm font-semibold">
               {mostValuableItem?.name ?? "—"}
@@ -1010,7 +1010,7 @@ async function updateQuantity(formData: FormData) {
               <div className="text-left lg:text-right">
                 <div className="text-sm text-white/50">Progress</div>
                 <div className="text-3xl font-bold">
-                  {ownedUniqueSetCards} / {totalCardsInTrackedSet}
+                  {ownedUniqueSetItems} / {totalItemsInTrackedSet}
                 </div>
                 <div className="mt-1 flex items-center justify-start gap-2 lg:justify-end">
                   <span className="text-sm text-white/60">
@@ -1040,20 +1040,20 @@ async function updateQuantity(formData: FormData) {
             </div>
 
             <div className="mt-5">
-              <div className="text-sm font-medium">Missing Cards</div>
+              <div className="text-sm font-medium">Missing Items</div>
 
               <div className="mt-3 space-y-2">
-                {missingCards.length === 0 ? (
+                {missingItems.length === 0 ? (
                   <div className="text-sm text-white/60">
-                    No missing cards found — this set may be complete.
+                    No missing items found — this set may be complete.
                   </div>
                 ) : (
-                  missingCards.map((card) => (
+                  missingItems.map((item) => (
                     <div
-                      key={card.id}
+                      key={item.id}
                       className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
                     >
-                      {card.name}
+                      {item.name}
                     </div>
                   ))
                 )}
@@ -1121,14 +1121,14 @@ async function updateQuantity(formData: FormData) {
             TOP 5 MOST VALUABLE CARDS
            ========================================= */}
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-          <div className="text-base font-semibold">Top 5 Most Valuable Cards</div>
+          <div className="text-base font-semibold">Top 5 Most Valuable Items</div>
           <div className="mt-1 text-sm text-white/55">
             Highest-value items in this collection
           </div>
 
           <div className="mt-4 space-y-3">
             {topValuableItems.length === 0 ? (
-              <div className="text-sm text-white/60">No cards to rank yet.</div>
+              <div className="text-sm text-white/60">No items to rank yet.</div>
             ) : (
               topValuableItems.map((item, index) => (
                 <div
@@ -1323,7 +1323,7 @@ async function updateQuantity(formData: FormData) {
             ) : currentView === "list" ? (
               <div className="space-y-4">
                 {sorted.map((i) => {
-                  const card = i.card;
+                  const item = i.item;
 
                   // Prices used in the row UI
                   const effectiveMarketPrice = getEffectiveMarketPrice(i);
@@ -1337,13 +1337,13 @@ async function updateQuantity(formData: FormData) {
                       className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4 transition hover:bg-white/[0.06] lg:flex-row lg:items-start lg:justify-between"
                     >
                       {/* LEFT SIDE
-                          Card image + name + set information */}
+                          Item image + name + set information */}
                       <div className="flex items-center gap-4">
                         <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/20 text-[10px] text-white/40">
-                          {card.imageUrl ? (
+                          {item.imageUrl ? (
                             <img
-                              src={card.imageUrl}
-                              alt={card.name}
+                              src={item.imageUrl}
+                              alt={item.name}
                               className="h-full w-full object-cover"
                             />
                           ) : (
@@ -1353,16 +1353,16 @@ async function updateQuantity(formData: FormData) {
 
                         <div>
                           <div className="text-base font-semibold">
-                            {card.name}
+                            {item.name}
                             <span className="ml-2 text-white/60">
                               x {i.quantity}
                             </span>
                           </div>
 
                           <div className="mt-1 text-xs text-white/60">
-                            {card.game} • {card.set}
+                            {item.game} • {item.set}
 
-                            {card.isCustom && (
+                            {item.isCustom && (
                               <span className="ml-2 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px]">
                                 Custom
                               </span>
@@ -1488,11 +1488,11 @@ async function updateQuantity(formData: FormData) {
                * GRID VIEW
                *
                * This is the new visual "collector" view.
-               * It shows cards like a gallery/binder instead of data rows.
+               * It shows items like a gallery/binder instead of data rows.
                */
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
                 {sorted.map((i) => {
-                  const card = i.card;
+                  const item = i.item;
 
                   const effectiveMarketPrice = getEffectiveMarketPrice(i);
                   const marketTotal = getRowMarketTotal(i);
@@ -1504,12 +1504,12 @@ async function updateQuantity(formData: FormData) {
                       key={i.id}
                       className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04] transition hover:bg-white/[0.06]"
                     >
-                      {/* Card image area */}
+                      {/* Item image area */}
                       <div className="aspect-[3/4] w-full overflow-hidden border-b border-white/10 bg-black/30">
-                        {card.imageUrl ? (
+                        {item.imageUrl ? (
                           <img
-                            src={card.imageUrl}
-                            alt={card.name}
+                            src={item.imageUrl}
+                            alt={item.name}
                             className="h-full w-full object-cover"
                           />
                         ) : (
@@ -1519,15 +1519,15 @@ async function updateQuantity(formData: FormData) {
                         )}
                       </div>
 
-                      {/* Card details */}
+                      {/* Item details */}
                       <div className="p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="truncate text-base font-semibold">
-                              {card.name}
+                              {item.name}
                             </div>
                             <div className="mt-1 text-xs text-white/60">
-                              {card.game} • {card.set}
+                              {item.game} • {item.set}
                             </div>
                           </div>
 
@@ -1536,7 +1536,7 @@ async function updateQuantity(formData: FormData) {
                           </div>
                         </div>
 
-                        {card.isCustom && (
+                        {item.isCustom && (
                           <div className="mt-2 inline-flex rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-white/70">
                             Custom
                           </div>

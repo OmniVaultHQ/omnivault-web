@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 type Row = {
-  cardNumber?: string;
+  itemNumber?: string;
   name?: string;
   set?: string;
   game?: string;
@@ -26,9 +26,11 @@ function parseCSV(text: string): Row[] {
   for (let i = 1; i < lines.length; i++) {
     const cols = splitCSVLine(lines[i]);
     const obj: any = {};
+
     headers.forEach((h, idx) => {
       obj[h] = (cols[idx] ?? "").trim();
     });
+
     rows.push(obj);
   }
 
@@ -44,7 +46,6 @@ function splitCSVLine(line: string): string[] {
     const ch = line[i];
 
     if (ch === '"' && line[i + 1] === '"') {
-      // escaped quote ""
       cur += '"';
       i++;
       continue;
@@ -88,11 +89,10 @@ export async function POST(req: Request) {
     }
 
     let imported = 0;
-    let updated = 0;
     let skipped = 0;
 
     for (const r of parsed) {
-      const cardNumber = (r.cardNumber ?? "").trim() || null;
+      const itemNumber = (r.itemNumber ?? "").trim() || null;
       const name = (r.name ?? "").trim();
       const set = (r.set ?? "").trim();
       const game = (r.game ?? "").trim();
@@ -106,35 +106,44 @@ export async function POST(req: Request) {
         continue;
       }
 
-      // Your schema uses this compound unique:
-      // @@unique([name, set, game], name: "name_set_game")
-      const card = await prisma.card.upsert({
+      // Find an existing catalog item with same name + set + game
+      const existingItem = await prisma.item.findFirst({
         where: {
-          name_set_game: { name, set, game },
-        },
-        update: {
-          imageUrl,
-          rarity,
-          setCode,
-          cardNumber,
-        },
-        create: {
           name,
           set,
           game,
-          imageUrl,
-          rarity,
-          setCode,
-          cardNumber,
         },
       });
 
-      // prisma upsert returns the record either way; we’ll “count” it as updated if already existed
-      // (Not perfect without extra lookup, but good enough)
-      if (card) imported++;
+      if (existingItem) {
+        await prisma.item.update({
+          where: { id: existingItem.id },
+          data: {
+            imageUrl,
+            rarity,
+            setCode,
+            itemNumber,
+          },
+        });
+      } else {
+        await prisma.item.create({
+          data: {
+            name,
+            set,
+            game,
+            imageUrl,
+            rarity,
+            setCode,
+            itemNumber,
+            isCustom: false,
+          },
+        });
+      }
+
+      imported++;
     }
 
-    return NextResponse.json({ imported, updated, skipped });
+    return NextResponse.json({ imported, skipped });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? "Import failed" },

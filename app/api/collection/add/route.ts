@@ -5,6 +5,7 @@ import { getOrCreateDefaultCollection } from "@/lib/collections";
 
 export async function POST(req: Request) {
   const session = await auth();
+
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -12,30 +13,33 @@ export async function POST(req: Request) {
   const userId = session.user.id;
 
   const body = await req.json();
-  const cardId = String(body.cardId ?? "");
+  const itemId = String(body.itemId ?? "");
   const quantity = Number(body.quantity ?? 1);
 
-  if (!cardId) {
-    return NextResponse.json({ error: "Missing cardId" }, { status: 400 });
+  if (!itemId) {
+    return NextResponse.json({ error: "Missing itemId" }, { status: 400 });
   }
 
-  const collectionId = body.collectionId;
+  const defaultCollection = await getOrCreateDefaultCollection(userId);
+  const collectionId = String(body.collectionId ?? defaultCollection.id);
+
+  const safeQuantity = Number.isFinite(quantity) ? Math.max(1, quantity) : 1;
 
   await prisma.collectionItem.upsert({
     where: {
-      collectionId_cardId: {
-        collectionId: collectionId,
-        cardId,
+      collectionId_itemId: {
+        collectionId,
+        itemId,
       },
     },
     create: {
       userId,
-      collectionId: collectionId,
-      cardId,
-      quantity,
+      collectionId,
+      itemId,
+      quantity: safeQuantity,
     },
     update: {
-      quantity: { increment: quantity },
+      quantity: { increment: safeQuantity },
     },
   });
 

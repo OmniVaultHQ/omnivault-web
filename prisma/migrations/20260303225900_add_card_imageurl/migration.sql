@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "Card" ADD COLUMN "imageUrl" TEXT;
+ALTER TABLE "Item" ADD COLUMN "imageUrl" TEXT;

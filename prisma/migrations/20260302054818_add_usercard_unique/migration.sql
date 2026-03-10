@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "UserCard" ADD COLUMN "purchasePrice" REAL;
+ALTER TABLE "UserItem" ADD COLUMN "purchasePrice" REAL;

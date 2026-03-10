@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 
-export async function addToCollection(cardId: string, quantity = 1) {
+export async function addToCollection(itemId: string, quantity = 1) {
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -15,20 +15,20 @@ export async function addToCollection(cardId: string, quantity = 1) {
 
   const qty = Number.isFinite(quantity) ? Math.max(1, Math.floor(quantity)) : 1;
 
-  const existing = await prisma.userCard.findFirst({
-    where: { userId, cardId },
+  const existing = await prisma.userItem.findFirst({
+    where: { userId, itemId },
   });
 
   if (existing) {
-    await prisma.userCard.update({
+    await prisma.userItem.update({
       where: { id: existing.id },
       data: { quantity: existing.quantity + qty },
     });
   } else {
-    await prisma.userCard.create({
+    await prisma.userItem.create({
       data: {
         userId,
-        cardId,
+        itemId,
         quantity: qty,
       },
     });

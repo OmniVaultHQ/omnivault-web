@@ -15,13 +15,13 @@ model User {
   image     String?
   createdAt DateTime @default(now())
 
-  cards UserCard[]
+  items UserItem[]
 
   accounts        Account[]
   sessions        Session[]
   collections     Collection[]
   collectionItems CollectionItem[]
-  customItems CustomItem[]
+  customItems     CustomItem[]
 }
 
 model Account {
@@ -60,57 +60,53 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-model Card {
+model Item {
   id String @id @default(cuid())
 
-  // Display fields
   name     String
   set      String
   game     String
   imageUrl String?
 
-  // Catalog identity fields
-  cardNumber String? // ex: "ST01-001"
-  rarity     String? // ex: "C", "R", "SR"
-  setCode    String? // ex: "ST01"
+  itemNumber String?
+  rarity     String?
+  setCode    String?
 
-  // ✅ NEW: separates catalog vs custom cards
   isCustom        Boolean @default(false)
-  createdByUserId String? // null = catalog/imported
+  createdByUserId String?
 
-  userCards       UserCard[]
-  prices          CardPrice[]
+  userItems       UserItem[]
+  prices          ItemPrice[]
   collectionItems CollectionItem[]
 
-  // ✅ BEST unique for catalog cards that have real numbers
-  @@unique([game, setCode, cardNumber], name: "game_setCode_cardNumber")
-  // ✅ Fallback unique (prevents dupes when cardNumber is missing)
+  @@unique([game, setCode, itemNumber], name: "game_setCode_itemNumber")
   @@unique([game, setCode, name], name: "game_setCode_name")
+  @@unique([name, set, game], name: "name_set_game")
   @@index([game])
   @@index([setCode])
   @@index([name])
 }
 
-model UserCard {
+model UserItem {
   id            String @id @default(cuid())
   userId        String
-  cardId        String
+  itemId        String
   quantity      Int    @default(1)
   purchasePrice Float?
 
   user User @relation(fields: [userId], references: [id])
-  card Card @relation(fields: [cardId], references: [id])
+  item Item @relation(fields: [itemId], references: [id])
 
-  @@unique([userId, cardId], name: "userId_cardId")
+  @@unique([userId, itemId], name: "userId_itemId")
 }
 
-model CardPrice {
+model ItemPrice {
   id          String   @id @default(cuid())
-  cardId      String
+  itemId      String
   marketPrice Float
   lastUpdated DateTime @default(now())
 
-  card Card @relation(fields: [cardId], references: [id])
+  item Item @relation(fields: [itemId], references: [id])
 }
 
 model Collection {
@@ -120,8 +116,8 @@ model Collection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items CollectionItem[]
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       CollectionItem[]
   customItems CustomItem[]
 
   @@unique([userId, name])
@@ -131,22 +127,24 @@ model CollectionItem {
   id            String @id @default(cuid())
   userId        String
   collectionId  String
-  cardId        String
+  itemId        String
   quantity      Int    @default(1)
   purchasePrice Float?
+  marketPrice   Float?
 
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
-  card       Card       @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  item       Item       @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([collectionId, cardId])
+  @@unique([collectionId, itemId], name: "collectionId_itemId")
   @@index([collectionId])
-  @@index([cardId])
+  @@index([itemId])
   @@index([userId])
 }
+
 model CustomItem {
   id            String   @id @default(cuid())
   userId        String

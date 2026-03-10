@@ -10,14 +10,17 @@ export const dynamic = "force-dynamic";
 export default async function CatalogPage() {
   const session = await auth();
 
+  // If user is not logged in, redirect to login
   if (!session?.user?.id) {
     redirect("/login");
   }
 
   const userId = session.user.id;
 
+  // Ensure the user has a default collection
   const defaultCollection = await getOrCreateDefaultCollection(userId);
 
+  // Load all collections belonging to the user
   const collections = await prisma.collection.findMany({
     where: { userId },
     orderBy: { createdAt: "asc" },
@@ -25,6 +28,7 @@ export default async function CatalogPage() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-10">
+      {/* Catalog search allows users to find items and add them to collections */}
       <CatalogSearch
         collections={collections}
         activeCollectionId={defaultCollection.id}

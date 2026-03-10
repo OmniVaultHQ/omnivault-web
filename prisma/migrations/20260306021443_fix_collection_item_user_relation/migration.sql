@@ -5,4 +5,4 @@ ALTER TABLE "CollectionItem" ADD COLUMN "purchasePrice" REAL;
 CREATE INDEX "CollectionItem_collectionId_idx" ON "CollectionItem"("collectionId");
 
 -- CreateIndex
-CREATE INDEX "CollectionItem_cardId_idx" ON "CollectionItem"("cardId");
+CREATE INDEX "CollectionItem_itemId_idx" ON "CollectionItem"("itemId");

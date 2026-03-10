@@ -14,7 +14,7 @@ import SubmitButton from "@/app/components/Submitbutton";
 Props passed in from the dashboard page.
 
 action
-- Server action that handles creating the custom item/card
+- Server action that handles creating the custom item
 
 collections
 - All collections the user can choose from
@@ -31,7 +31,7 @@ type Props = {
   activeCollectionId: string;
 };
 
-export default function AddCardForm({
+export default function AddItemForm({
   action,
   collections,
   activeCollectionId,
@@ -98,7 +98,7 @@ export default function AddCardForm({
     Next.js will send all named form fields in FormData.
     */
     <form action={action} className="mt-3 space-y-3">
-      {/* 
+      {/*
       Collection selector
       Lets the user choose which collection the custom item should be added to
       */}
@@ -153,16 +153,17 @@ export default function AddCardForm({
       />
 
       {/*
-      Category / game
+      Category / game / type
       Examples:
       - Warhammer
       - Comics
       - Gundam
       - Pokémon
+      - Shoes
       */}
       <input
         name="game"
-        placeholder="Category (ex: Warhammer, Comics, Gundam)"
+        placeholder="Category / Game (ex: Warhammer, Comics, Gundam)"
         className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 outline-none"
       />
 
@@ -172,6 +173,7 @@ export default function AddCardForm({
       - Blood Angels
       - Starter Deck
       - Base Set
+      - Air Jordan
       */}
       <input
         name="set"
@@ -188,7 +190,7 @@ export default function AddCardForm({
       */}
       <input
         name="name"
-        placeholder="Item name (ex: Sanguinary Guard, RX-78-2)"
+        placeholder="Item Name (ex: Sanguinary Guard, RX-78-2)"
         className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 outline-none"
       />
 
@@ -208,11 +210,9 @@ export default function AddCardForm({
       Submit button
       Sends the form data to the server action
       */}
-      <SubmitButton
-  className="mt-4 w-full rounded-xl bg-white text-black font-medium py-3 hover:bg-gray-200 transition"
->
-  + Add to Collection
-</SubmitButton>
+      <SubmitButton className="mt-4 w-full rounded-xl bg-white py-3 font-medium text-black transition hover:bg-gray-200">
+        + Add Item to Collection
+      </SubmitButton>
     </form>
   );
 }

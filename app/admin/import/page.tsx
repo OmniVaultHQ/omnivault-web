@@ -14,7 +14,7 @@ export default function AdminImportPage() {
     const fd = new FormData();
     fd.append("file", file);
 
-    const res = await fetch("/api/admin/import-cards", {
+    const res = await fetch("/api/admin/import-items", {
       method: "POST",
       body: fd,
     });
@@ -42,7 +42,7 @@ export default function AdminImportPage() {
           Upload a CSV with columns:
           <br />
           <code>
-            cardNumber,name,set,game,imageUrl,rarity,setCode
+            itemNumber,name,set,game,imageUrl,rarity,setCode
           </code>
         </p>
 

@@ -8,7 +8,7 @@ export async function GET(req: Request) {
 
   if (!name) return NextResponse.json({ imageUrl: null });
 
-  const url = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(
+  const url = `https://db.ygoprodeck.com/api/v7/iteminfo.php?name=${encodeURIComponent(
     name
   )}`;
 
@@ -17,7 +17,7 @@ export async function GET(req: Request) {
     if (!res.ok) return NextResponse.json({ imageUrl: null });
 
     const data = await res.json();
-    const imageUrl = data?.data?.[0]?.card_images?.[0]?.image_url ?? null;
+    const imageUrl = data?.data?.[0]?.item_images?.[0]?.image_url ?? null;
 
     return NextResponse.json({ imageUrl });
   } catch {

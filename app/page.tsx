@@ -158,7 +158,7 @@ export default function Home() {
             </FadeIn>
           </div>
 
-          {/* Mock Preview Card */}
+          {/* Mock Preview item */}
           <FadeIn delayMs={150}>
             <div className="mt-16 rounded-2xl border border-white/10 bg-white/5 p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">

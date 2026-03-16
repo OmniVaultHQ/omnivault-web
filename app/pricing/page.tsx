@@ -261,7 +261,7 @@ export default function PricingPage() {
 
           <div className="mt-6 grid gap-6 md:grid-cols-2">
             <div>
-              <div className="text-sm font-semibold">Do I need a credit card for Free?</div>
+              <div className="text-sm font-semibold">Do I need a credit item for Free?</div>
               <div className="mt-2 text-sm text-slate-400">Nope. Create an account and start tracking.</div>
             </div>
 
@@ -282,7 +282,7 @@ export default function PricingPage() {
             <div>
               <div className="text-sm font-semibold">What counts as “an item”?</div>
               <div className="mt-2 text-sm text-slate-400">
-                Any collectible entry: a card, mini, sealed product, game, etc.
+                Any collectible entry: a item, mini, sealed product, game, etc.
               </div>
             </div>
           </div>

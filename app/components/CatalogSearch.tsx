@@ -43,21 +43,33 @@ All collections the user owns
 
 activeCollectionId:
 The collection selected by default
+
+defaultQuery:
+Optional starting search text coming from the URL
+Example:
+ /dashboard?catalog=Dark%20Magician
 */
 type Props = {
   collections: { id: string; name: string }[];
   activeCollectionId: string;
+  defaultQuery?: string;
 };
 
 export default function CatalogSearch({
   collections,
   activeCollectionId,
+  defaultQuery = "",
 }: Props) {
   /*
   q
   Search text typed by the user
+
+  Starts with defaultQuery if one was provided from the URL.
+  This lets links like:
+  /dashboard?catalog=Dark%20Magician
+  open the catalog with that search already filled in.
   */
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(defaultQuery);
 
   /*
   items
@@ -113,6 +125,15 @@ export default function CatalogSearch({
   useEffect(() => {
     setCollectionId(activeCollectionId);
   }, [activeCollectionId]);
+
+  /*
+  Keep local catalog search synced if the dashboard URL changes.
+  Example:
+  user clicks a missing-item "Search" shortcut in Set Completion
+  */
+  useEffect(() => {
+    setQ(defaultQuery);
+  }, [defaultQuery]);
 
   /*
   SEARCH EFFECT
@@ -303,10 +324,10 @@ export default function CatalogSearch({
                   {status === "adding"
                     ? "Adding…"
                     : status === "added"
-                    ? "Added!"
-                    : status === "error"
-                    ? "Error"
-                    : "Add"}
+                      ? "Added!"
+                      : status === "error"
+                        ? "Error"
+                        : "Add"}
                 </button>
               </div>
             </div>

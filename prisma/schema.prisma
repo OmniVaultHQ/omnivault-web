@@ -63,6 +63,10 @@ model VerificationToken {
 model Item {
   id String @id @default(cuid())
 
+  // NEW
+  category String?
+
+  // Display fields
   name     String
   set      String
   game     String
@@ -75,6 +79,9 @@ model Item {
   isCustom        Boolean @default(false)
   createdByUserId String?
 
+  purchasePrice Float?  // what the user paid for the item
+  marketPrice   Float?  // current market value
+
   userItems       UserItem[]
   prices          ItemPrice[]
   collectionItems CollectionItem[]
@@ -82,6 +89,7 @@ model Item {
   @@unique([game, setCode, itemNumber], name: "game_setCode_itemNumber")
   @@unique([game, setCode, name], name: "game_setCode_name")
   @@unique([name, set, game], name: "name_set_game")
+
   @@index([game])
   @@index([setCode])
   @@index([name])
@@ -102,11 +110,29 @@ model UserItem {
 
 model ItemPrice {
   id          String   @id @default(cuid())
-  itemId      String
-  marketPrice Float
-  lastUpdated DateTime @default(now())
 
-  item Item @relation(fields: [itemId], references: [id])
+  // Which item this price belongs to
+  itemId      String
+
+  // Current market price we fetched or stored
+  marketPrice Float
+
+  // Where the price came from
+  // Examples: "manual", "tcgplayer", "pricecharting"
+  source      String   @default("manual")
+
+  // When this price record was created
+  createdAt   DateTime @default(now())
+
+  // When this price entry was last updated
+  lastUpdated DateTime @updatedAt
+
+  // Relation back to the item
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  // Helpful indexes for searching and sorting price history
+  @@index([itemId])
+  @@index([source])
 }
 
 model Collection {
@@ -115,6 +141,7 @@ model Collection {
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  
 
   user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   items       CollectionItem[]
@@ -124,25 +151,36 @@ model Collection {
 }
 
 model CollectionItem {
-  id            String @id @default(cuid())
+  id            String   @id @default(cuid())
   userId        String
   collectionId  String
   itemId        String
-  quantity      Int    @default(1)
+  quantity      Int      @default(1)
+
+  // Price the user paid per item
   purchasePrice Float?
+
+  // Manual market price override for this owned row
   marketPrice   Float?
 
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
-  item       Item       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  // Condition of the user's owned item
+  // Examples:
+  // - Near Mint
+  // - Played
+  // - Sealed
+  // - Painted
+  // - Unpainted
+  condition     String?
+  notes         String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  @@unique([collectionId, itemId], name: "collectionId_itemId")
-  @@index([collectionId])
-  @@index([itemId])
-  @@index([userId])
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection    Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  item          Item       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, itemId])
 }
 
 model CustomItem {

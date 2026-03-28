@@ -60,10 +60,75 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+/*
+Master source of imported catalog data.
+
+Examples:
+- pokemon
+- onepiece
+- gundam
+- marvel-legends
+- nike
+*/
+model CatalogSource {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  category    String?  // cards, figures, shoes, etc.
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  collections CatalogCollection[]
+
+  @@index([category])
+}
+
+/*
+A release group, set, wave, season, or product line
+that belongs to a catalog source.
+
+Examples:
+- Base Set
+- Scarlet & Violet
+- Wave 3
+- Summer 2024 Releases
+*/
+model CatalogCollection {
+  id           String   @id @default(cuid())
+  sourceId     String
+  externalId   String?  // ID from outside API if available
+  name         String
+  code         String?  // set code / wave code / release code
+  type         String?  // set, wave, season, release, series
+  releaseDate  DateTime?
+  imageUrl     String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  source       CatalogSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  items        Item[]
+
+  @@unique([sourceId, externalId])
+  @@unique([sourceId, name, code])
+  @@index([sourceId])
+  @@index([name])
+  @@index([code])
+}
+
+/*
+Master catalog item.
+
+This is NOT the user's owned item.
+This is the shared catalog entry all users can add from.
+*/
 model Item {
   id String @id @default(cuid())
 
-  // NEW
+  catalogCollectionId String?
+
+  // Broad category
   category String?
 
   // Display fields
@@ -72,15 +137,26 @@ model Item {
   game     String
   imageUrl String?
 
+  // Common collectible fields
   itemNumber String?
   rarity     String?
   setCode    String?
 
+  // External sync fields
+  externalId String?
+  externalUrl String?
+
+  // Flexible metadata for future categories
+  metadata Json?
+
   isCustom        Boolean @default(false)
   createdByUserId String?
 
-  purchasePrice Float?  // what the user paid for the item
-  marketPrice   Float?  // current market value
+  // Optional cached market data on the catalog item itself
+  purchasePrice Float?
+  marketPrice   Float?
+
+  catalogCollection CatalogCollection? @relation(fields: [catalogCollectionId], references: [id], onDelete: SetNull)
 
   userItems       UserItem[]
   prices          ItemPrice[]
@@ -90,9 +166,11 @@ model Item {
   @@unique([game, setCode, name], name: "game_setCode_name")
   @@unique([name, set, game], name: "name_set_game")
 
+  @@index([catalogCollectionId])
   @@index([game])
   @@index([setCode])
   @@index([name])
+  @@index([externalId])
 }
 
 model UserItem {
@@ -110,27 +188,14 @@ model UserItem {
 
 model ItemPrice {
   id          String   @id @default(cuid())
-
-  // Which item this price belongs to
   itemId      String
-
-  // Current market price we fetched or stored
   marketPrice Float
-
-  // Where the price came from
-  // Examples: "manual", "tcgplayer", "pricecharting"
   source      String   @default("manual")
-
-  // When this price record was created
   createdAt   DateTime @default(now())
-
-  // When this price entry was last updated
   lastUpdated DateTime @updatedAt
 
-  // Relation back to the item
   item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
-  // Helpful indexes for searching and sorting price history
   @@index([itemId])
   @@index([source])
 }
@@ -141,7 +206,6 @@ model Collection {
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
 
   user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   items       CollectionItem[]
@@ -157,30 +221,35 @@ model CollectionItem {
   itemId        String
   quantity      Int      @default(1)
 
-  // Price the user paid per item
+  // Price the user paid per owned item
   purchasePrice Float?
 
-  // Manual market price override for this owned row
+  // Manual or synced market price for this owned row
   marketPrice   Float?
 
-  // Condition of the user's owned item
-  // Examples:
-  // - Near Mint
-  // - Played
-  // - Sealed
-  // - Painted
-  // - Unpainted
+  // If true, automatic pricing refresh should not overwrite this row
+  manualPriceLocked Boolean @default(false)
+
+  // manual, simulated, tcgplayer, ebay, pricecharting, etc.
+  priceSource   String?
+
+  lastPriceUpdated DateTime?
+
+  // User-owned condition
   condition     String?
   notes         String?
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  collection    Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
-  item          Item       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  item       Item       @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
-  @@unique([collectionId, itemId])
+  @@unique([userId, itemId, collectionId])
+  @@index([userId])
+  @@index([collectionId])
+  @@index([itemId])
 }
 
 model CustomItem {
@@ -194,6 +263,8 @@ model CustomItem {
   quantity      Int      @default(1)
   purchasePrice Float?
   marketPrice   Float?
+  priceSource   String?
+  lastPriceUpdated DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

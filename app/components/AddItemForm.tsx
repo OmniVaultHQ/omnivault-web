@@ -45,10 +45,32 @@ export default function AddItemForm({
   const [previewUrl, setPreviewUrl] = useState("");
 
   /*
+  selectedCollectionId
+  - Controlled value for the collection dropdown
+
+  Why this exists:
+  - defaultValue only applies on first render
+  - when the active dashboard collection changes, we want this select
+    to update too
+  */
+  const [selectedCollectionId, setSelectedCollectionId] =
+    useState(activeCollectionId);
+
+  /*
   formRef
   - Allows us to manually reset the form after submission
   */
   const formRef = useRef<HTMLFormElement>(null);
+
+  /*
+  Keep the collection dropdown synced with the active dashboard collection.
+
+  This fixes the bug where the UI could still show the wrong collection
+  after navigating/searching within the dashboard flow.
+  */
+  useEffect(() => {
+    setSelectedCollectionId(activeCollectionId);
+  }, [activeCollectionId]);
 
   /*
   Cleanup when component unmounts or preview changes.
@@ -110,6 +132,7 @@ export default function AddItemForm({
   - Runs the server action
   - Resets the form fields
   - Clears image preview
+  - Re-syncs collection select back to the current active collection
 
   Note:
   If your server action redirects immediately, the page refresh/navigation
@@ -120,6 +143,9 @@ export default function AddItemForm({
 
     // Reset all form fields
     formRef.current?.reset();
+
+    // Re-sync collection dropdown after reset
+    setSelectedCollectionId(activeCollectionId);
 
     // Clear preview image
     if (previewUrl.startsWith("blob:")) {
@@ -140,7 +166,8 @@ export default function AddItemForm({
         </label>
         <select
           name="collectionId"
-          defaultValue={activeCollectionId}
+          value={selectedCollectionId}
+          onChange={(e) => setSelectedCollectionId(e.target.value)}
           className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm outline-none transition focus:border-blue-400/40"
         >
           {collections.map((c) => (

@@ -29,6 +29,8 @@ type ItemDetailModalItem = {
   totalCost: number;
   profitLoss: number | null;
   updatedAtLabel: string | null;
+  manualPriceLocked?: boolean;
+  activePriceSource?: string | null;
   history: {
     id: string;
     marketPrice: number;
@@ -43,6 +45,7 @@ type Props = {
   item: ItemDetailModalItem | null;
   updateItemDetails: (formData: FormData) => Promise<void>;
   deleteItem: (formData: FormData) => Promise<void>;
+  useAutoPriceAgain: (formData: FormData) => Promise<void>;
 };
 
 export default function ItemDetailModal({
@@ -51,6 +54,7 @@ export default function ItemDetailModal({
   item,
   updateItemDetails,
   deleteItem,
+  useAutoPriceAgain,
 }: Props) {
   // Do not render anything if the modal is closed or no item is selected
   if (!open || !item) return null;
@@ -241,6 +245,9 @@ export default function ItemDetailModal({
                 <div className="mt-2 text-2xl font-semibold">
                   ${Number(item.effectiveMarketPrice ?? 0).toFixed(2)}
                 </div>
+                <div className="mt-1 text-xs text-white/50">
+                  Source: {item.activePriceSource ?? "Unknown"}
+                </div>
 
                 {/* Recent price movement */}
                 {priceChange && (
@@ -307,17 +314,29 @@ export default function ItemDetailModal({
                 </div>
               </div>
 
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
                 <div className="text-xs uppercase tracking-wide text-white/45">
                   Effective Market Price Used
                 </div>
                 <div className="mt-2 text-3xl font-semibold">
                   ${item.effectiveMarketPrice.toFixed(2)}
                 </div>
-                <div className="mt-2 text-sm text-white/55">
-                  Last market update:{" "}
-                  {item.updatedAtLabel ?? "No market update yet"}
+
+                <div className="mt-2 space-y-1 text-sm text-white/55">
+                  <div>
+                    Source: {item.activePriceSource ?? "No Source"}
+                  </div>
+                  <div>
+                    Last market update:{" "}
+                    {item.updatedAtLabel ?? "No market update yet"}
+                  </div>
                 </div>
+
+                {item.manualPriceLocked ? (
+                  <div className="mt-3 inline-flex rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
+                    Manual price is currently locked
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -386,13 +405,35 @@ export default function ItemDetailModal({
                   />
                 </div>
 
-                <div className="flex flex-wrap gap-3">
+                  <div className="flex flex-wrap gap-3">
                   <SubmitButton className="rounded-xl border border-blue-400/30 bg-blue-500/15 px-4 py-2 text-sm hover:bg-blue-500/20">
                     Save Item Details
                   </SubmitButton>
                 </div>
               </form>
-            </div>
+
+              {item.manualPriceLocked ? (
+                <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/5 p-4">
+                  <div className="text-sm text-amber-200">
+                    This item is using a locked manual market price.
+                  </div>
+                  <div className="mt-1 text-xs text-amber-200/70">
+                    Use auto pricing again to let refresh pull simulated or provider prices.
+                  </div>
+
+                  <form action={useAutoPriceAgain} className="mt-3">
+                    <input type="hidden" name="id" value={item.id} />
+                    <SubmitButton className="rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-sm hover:bg-amber-500/20">
+                      Use Auto Price Again
+                    </SubmitButton>
+                  </form>
+                </div>
+              ) : null}
+
+              <div className="mt-4 text-xs text-white/45">
+                Saving a manual market price locks this row until you switch it back to auto pricing.
+              </div>
+              </div>
 
             {/* Price history */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">

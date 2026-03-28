@@ -4,16 +4,12 @@ import { useEffect } from "react";
 import AddItemForm from "@/app/components/AddItemForm";
 import CatalogSearch from "@/app/components/CatalogSearch";
 
-type Collection = {
-  id: string;
-  name: string;
-};
-
 type Props = {
   isMainCollection: boolean;
   activeCollectionId: string;
   collections: { id: string; name: string }[];
   addItem: (formData: FormData) => Promise<void>;
+  onAdd: (itemId: string, collectionId: string) => Promise<void>;
   defaultCatalogQuery?: string;
 };
 
@@ -22,20 +18,12 @@ export default function CollectionTools({
   activeCollectionId,
   collections,
   addItem,
+  onAdd,
   defaultCatalogQuery = "",
 }: Props) {
   /*
-  ============================================================
-  AUTO SCROLL TO COLLECTION TOOLS
-  ------------------------------------------------------------
-  If the dashboard was opened from a missing-item search
-  shortcut, scroll this section into view automatically.
-
-  Example:
-  /dashboard?catalog=Dark%20Magician#collection-tools
-
-  This is more reliable than only depending on the URL hash.
-  ============================================================
+  If we arrived here with a catalog query already filled in,
+  scroll the tools section into view so the user lands near the search UI.
   */
   useEffect(() => {
     if (!defaultCatalogQuery) return;
@@ -55,10 +43,6 @@ export default function CollectionTools({
 
   return (
     <div id="collection-tools" className="mt-10 scroll-mt-24">
-      {/* =========================================
-          SECTION HEADER
-          Explains what this area is for
-         ========================================= */}
       <div className="mb-5">
         <h2 className="text-xl font-semibold">Collection Tools</h2>
         <p className="mt-1 text-sm text-white/55">
@@ -66,10 +50,6 @@ export default function CollectionTools({
         </p>
       </div>
 
-      {/* =========================================
-          EXPORT ACTION
-          Quick action row for exporting collection data
-         ========================================= */}
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <a
           href={
@@ -87,16 +67,7 @@ export default function CollectionTools({
         </div>
       </div>
 
-      {/* =========================================
-          TOOL CARDS
-          Split catalog search and manual add into
-          two separate cards for a cleaner UI
-         ========================================= */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        {/* =========================================
-            CATALOG SEARCH CARD
-            Use this for items already in your database
-           ========================================= */}
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -114,6 +85,7 @@ export default function CollectionTools({
 
           <div className="mt-4">
             <CatalogSearch
+              onAdd={onAdd}
               collections={collections}
               activeCollectionId={activeCollectionId}
               defaultQuery={defaultCatalogQuery}
@@ -121,11 +93,6 @@ export default function CollectionTools({
           </div>
         </section>
 
-        {/* =========================================
-            CUSTOM ITEM CARD
-            Use this when the item does not exist
-            in the catalog yet
-           ========================================= */}
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>

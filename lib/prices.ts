@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getBestProviderPrice } from "@/lib/price-providers";
 
 /*
 A single price result returned by the pricing engine.
@@ -23,19 +24,22 @@ function roundPrice(value: number) {
   return Number(value.toFixed(2));
 }
 
+
+
 /*
-This function decides what price an item should have.
+MAIN PRICE ENGINE ENTRY POINT
 
-Right now this is still a test engine:
-- it looks at the item's name
-- it returns a simulated market price
+This is the only function the rest of the app should call.
 
-Later we will replace this logic with real API calls.
+Flow:
+1. Load item
+2. Try real providers (not connected yet)
+3. Fall back to simulated pricing
 */
 export async function getPriceForItem(
   itemId: string
 ): Promise<PriceResult | null> {
-  // Load the item so we know what we are pricing
+  // Load the catalog item so we know what we are pricing
   const item = await prisma.item.findUnique({
     where: { id: itemId },
     select: {
@@ -50,77 +54,26 @@ export async function getPriceForItem(
   // If item does not exist, stop here
   if (!item) return null;
 
-  const name = item.name.toLowerCase();
-  const game = (item.game ?? "").toLowerCase();
-  const category = (item.category ?? "").toLowerCase();
-
   /*
-  Temporary pricing rules for testing.
-  These are fake prices so we can test the engine safely.
+  Ask provider layer for the best available price.
+  That file now handles simulated pricing too.
   */
-  if (name.includes("blue eyes")) {
-    return {
-      marketPrice: 200.0,
-      source: "simulated",
-    };
-  }
+  const providerPrice = await getBestProviderPrice(item);
 
-  if (name.includes("dark magician")) {
-    return {
-      marketPrice: 25.0,
-      source: "simulated",
-    };
-  }
+  // If no provider returned a price, stop here
+  if (!providerPrice) return null;
 
-  if (name.includes("batman")) {
-    return {
-      marketPrice: 10.0,
-      source: "simulated",
-    };
-  }
-
-  if (name.includes("commander dante")) {
-    return {
-      marketPrice: 0.0,
-      source: "simulated",
-    };
-  }
-
-  /*
-  Optional category/game-based fallback pricing.
-  This gives more realistic defaults than one flat number.
-  */
-  if (game.includes("yu-gi-oh")) {
-    return {
-      marketPrice: 8.5,
-      source: "simulated",
-    };
-  }
-
-  if (game.includes("warhammer")) {
-    return {
-      marketPrice: 12.0,
-      source: "simulated",
-    };
-  }
-
-  if (category.includes("comic")) {
-    return {
-      marketPrice: 6.0,
-      source: "simulated",
-    };
-  }
-
-  /*
-  Default fallback price.
-  This keeps the engine working for items
-  that do not match our custom rules yet.
-  */
   return {
-    marketPrice: 5.0,
-    source: "simulated",
+    marketPrice: roundPrice(providerPrice.marketPrice),
+    source: providerPrice.source,
   };
 }
+
+  
+
+
+
+
 
 /*
 This function writes a fresh price row into ItemPrice
@@ -154,28 +107,76 @@ export async function savePriceForItem(itemId: string) {
 
   /*
   If the newest saved price is the same as the next price,
-  do not create a duplicate history row.
+  we do not need another history row.
+  BUT we still want unlocked collection rows to have:
+  - latest marketPrice
+  - latest priceSource
+  - latest lastPriceUpdated
   */
-  if (latestPrice && roundPrice(latestPrice.marketPrice) === nextPrice) {
-    return {
-      skipped: true,
-      reason: "unchanged",
-      latestPrice,
-    };
+  const priceChanged =
+    !latestPrice || roundPrice(latestPrice.marketPrice) !== nextPrice;
+
+  // Save a new historical price row only when the price changed
+  let savedPrice: null | {
+    id: string;
+    marketPrice: number;
+    source: string;
+    createdAt: Date;
+    lastUpdated: Date;
+    itemId: string;
+  } = null;
+
+  if (priceChanged) {
+    savedPrice = await prisma.itemPrice.create({
+      data: {
+        itemId,
+        marketPrice: nextPrice,
+        source: result.source,
+      },
+    });
   }
 
-  // Save a new historical price row
-  const savedPrice = await prisma.itemPrice.create({
-    data: {
+  /*
+  IMPORTANT:
+  Update only UNLOCKED owned collection rows for this item.
+
+  Why:
+  - manualPriceLocked = true means the user explicitly wants
+    to keep their manual market price
+  - refresh should not overwrite those rows
+  */
+  const now = new Date();
+
+  const syncResult = await prisma.collectionItem.updateMany({
+    where: {
       itemId,
+      manualPriceLocked: false,
+    },
+    data: {
       marketPrice: nextPrice,
-      source: result.source,
+      priceSource: result.source,
+      lastPriceUpdated: now,
     },
   });
+
+  /*
+  Return a useful result object so debugging stays easy.
+  */
+  if (!priceChanged) {
+    return {
+      skipped: true,
+      reason: "unchanged-history-row",
+      latestPrice,
+      syncedCollectionRows: true,
+      syncedUnlockedRowCount: syncResult.count,
+    };
+  }
 
   return {
     skipped: false,
     savedPrice,
+    syncedCollectionRows: true,
+    syncedUnlockedRowCount: syncResult.count,
   };
 }
 

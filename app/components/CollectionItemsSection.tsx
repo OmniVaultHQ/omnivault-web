@@ -41,16 +41,37 @@ type CollectionRow = {
   purchasePrice: number | null;
   marketPrice: number | null;
 
+  /*
+  If true, this row is manually controlled and auto refresh
+  should not overwrite it.
+  */
+  manualPriceLocked?: boolean | null;
+
+  /*
+  Where the current owned-row market price came from
+  Examples:
+  - manual
+  - simulated
+  - tcgplayer
+  */
+  priceSource?: string | null;
+
+  /*
+  When the owned-row market price was last updated
+  */
+  lastPriceUpdated?: Date | string | null;
+
   // Condition saved on the owned collection row
   // Example: Near Mint, Painted, Sealed
   condition: string | null;
   notes: string | null;
 
-   item: {
+    item: {
     id: string;
     name: string;
     game: string;
     set: string;
+    rarity?: string | null;
     category?: string | null;
     imageUrl?: string | null;
     isCustom?: boolean;
@@ -67,6 +88,7 @@ type Props = {
   updateQuantity: (formData: FormData) => Promise<void>;
   deleteItem: (formData: FormData) => Promise<void>;
   updateItemDetails: (formData: FormData) => Promise<void>;
+  useAutoPriceAgain: (formData: FormData) => Promise<void>;
 };
 
 export default function CollectionItemsSection({
@@ -77,6 +99,7 @@ export default function CollectionItemsSection({
   updateQuantity,
   deleteItem,
   updateItemDetails,
+  useAutoPriceAgain,
 }: Props) {
   /*
   selectedItemId
@@ -114,6 +137,27 @@ export default function CollectionItemsSection({
   }
 
   /*
+  True if this row is manually locked
+  */
+  function isManualPriceLocked(row: CollectionRow) {
+    return Boolean(row.manualPriceLocked);
+  }
+
+  /*
+  Where the current owned-row market price came from
+  */
+  function getRowPriceSource(row: CollectionRow) {
+    return row.priceSource ?? null;
+  }
+
+  /*
+  Latest owned-row market price timestamp
+  */
+  function getRowPriceUpdatedAt(row: CollectionRow) {
+    return row.lastPriceUpdated ?? null;
+  }
+
+  /*
   Latest shared/catalog market price
   */
   function getCatalogMarketPrice(row: CollectionRow) {
@@ -131,19 +175,79 @@ export default function CollectionItemsSection({
     );
   }
 
+    /*
+  Fallback market price for catalog items.
+
+  Why this exists:
+  - newly added catalog items may not have a saved ItemPrice row yet
+  - we still want owned cards to show value immediately
+  - this keeps the row display consistent with set completion fallback logic
+  */
+  function getFallbackMarketPrice(row: CollectionRow) {
+    const rarity = row.item.rarity?.toLowerCase() ?? "";
+
+    if (rarity.includes("holo")) return 50;
+    if (rarity.includes("rare")) return 25;
+    if (rarity.includes("uncommon")) return 5;
+
+    return 1;
+  }
+
+  /*
+  Active displayed market price source.
+
+  Priority:
+  1. Manual locked price
+  2. Row-level synced price source
+  3. Catalog/shared history source
+  4. Purchase fallback
+  5. Rarity fallback
+  */
+  function getActivePriceSource(row: CollectionRow) {
+    if (isManualPriceLocked(row) && getManualMarketPrice(row) !== null) {
+      return "manual";
+    }
+
+    if (getManualMarketPrice(row) !== null && getRowPriceSource(row)) {
+      return getRowPriceSource(row);
+    }
+
+    if (row.item.prices?.[0]?.source) {
+      return row.item.prices[0].source;
+    }
+
+    if (getPurchasePrice(row) !== null) {
+      return "purchase fallback";
+    }
+
+    return "rarity fallback";
+  }
+
+  /*
+  Active displayed market price updated time.
+
+  Priority:
+  1. Row-level updated time
+  2. Catalog/shared updated time
+  */
+  function getActivePriceUpdatedAt(row: CollectionRow) {
+    return getRowPriceUpdatedAt(row) ?? getCatalogPriceUpdatedAt(row);
+  }
+
   /*
   Effective market price priority:
   1. manual market price on collection row
   2. latest catalog/shared price
   3. purchase price fallback
-  4. zero
+  4. rarity-based fallback
   */
   function getEffectiveMarketPrice(row: CollectionRow) {
     const manual = getManualMarketPrice(row);
     const catalog = getCatalogMarketPrice(row);
     const purchase = getPurchasePrice(row);
+    const fallback = getFallbackMarketPrice(row);
 
-    return manual ?? catalog ?? purchase ?? 0;
+    return manual ?? catalog ?? purchase ?? fallback;
   }
 
   /*
@@ -184,6 +288,34 @@ export default function CollectionItemsSection({
   }
 
   /*
+  Friendly label for price source
+  */
+  function getPriceSourceLabel(row: CollectionRow) {
+    const source = getActivePriceSource(row);
+
+    switch (source) {
+      case "manual":
+        return isManualPriceLocked(row) ? "Manual (Locked)" : "Manual";
+      case "simulated":
+        return "Simulated";
+      case "tcgplayer":
+        return "TCGPlayer";
+      case "ebay":
+        return "eBay";
+      case "pricecharting":
+        return "PriceCharting";
+      case "purchase fallback":
+        return "Purchase Fallback";
+      case "rarity fallback":
+        return "Rarity Fallback";
+      case "none":
+        return "No Source";
+      default:
+        return source;
+    }
+  }
+
+  /*
   Build the selected modal item from the clicked collection row
   */
   const modalItem = useMemo(() => {
@@ -199,38 +331,36 @@ export default function CollectionItemsSection({
     const totalValue = getRowMarketTotal(row);
     const totalCost = getRowPurchaseTotal(row);
     const profitLoss = getRowProfitLoss(row);
-    const updatedAtLabel = formatPriceUpdatedAt(getCatalogPriceUpdatedAt(row));
+    const updatedAtLabel = formatPriceUpdatedAt(getActivePriceUpdatedAt(row));
 
     return {
-  id: row.id,
-  name: row.item.name,
-  game: row.item.game,
-  set: row.item.set,
-  category: row.item.category ?? null,
-  imageUrl: row.item.imageUrl ?? null,
-  isCustom: row.item.isCustom ?? false,
-
-  condition: row.condition ?? null,
-
-  // NEW: notes field for modal editing
-  notes: (row as any).notes ?? null,
-
-  quantity: row.quantity,
-  purchasePrice,
-  manualMarketPrice,
-  catalogMarketPrice,
-  effectiveMarketPrice,
-  totalValue,
-  totalCost,
-  profitLoss,
-  updatedAtLabel,
-  history: row.item.prices.map((price) => ({
-    id: price.id,
-    marketPrice: price.marketPrice,
-    createdAt: price.createdAt,
-    source: price.source,
-  })),
-};
+      id: row.id,
+      name: row.item.name,
+      game: row.item.game,
+      set: row.item.set,
+      category: row.item.category ?? null,
+      imageUrl: row.item.imageUrl ?? null,
+      isCustom: row.item.isCustom ?? false,
+      condition: row.condition ?? null,
+      notes: row.notes ?? null,
+      quantity: row.quantity,
+      purchasePrice,
+      manualMarketPrice,
+      catalogMarketPrice,
+      effectiveMarketPrice,
+      totalValue,
+      totalCost,
+      profitLoss,
+      updatedAtLabel,
+      manualPriceLocked: isManualPriceLocked(row),
+      activePriceSource: getPriceSourceLabel(row),
+      history: row.item.prices.map((price) => ({
+        id: price.id,
+        marketPrice: price.marketPrice,
+        createdAt: price.createdAt,
+        source: price.source,
+      })),
+    };
   }, [selectedItemId, sorted]);
 
   /*
@@ -271,13 +401,15 @@ export default function CollectionItemsSection({
           {sorted.map((i) => {
             const item = i.item;
             const effectiveMarketPrice = getEffectiveMarketPrice(i);
-            const latestPriceUpdatedAt = formatPriceUpdatedAt(
-              getCatalogPriceUpdatedAt(i)
+            const activeUpdatedAt = formatPriceUpdatedAt(
+              getActivePriceUpdatedAt(i)
             );
             const marketTotal = getRowMarketTotal(i);
             const purchaseTotal = getRowPurchaseTotal(i);
             const rowProfitLoss = getRowProfitLoss(i);
             const priceChange = getPriceChange(i);
+            const sourceLabel = getPriceSourceLabel(i);
+            const locked = isManualPriceLocked(i);
 
             return (
               <div
@@ -325,6 +457,12 @@ export default function CollectionItemsSection({
                           Custom
                         </span>
                       )}
+
+                      {locked ? (
+                        <span className="ml-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                          Manual Locked
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -446,6 +584,8 @@ export default function CollectionItemsSection({
                       Market used: ${effectiveMarketPrice.toFixed(2)} each
                     </div>
 
+                    <div>Source: {sourceLabel}</div>
+
                     {priceChange !== null && (
                       <div
                         className={
@@ -462,7 +602,7 @@ export default function CollectionItemsSection({
                     )}
 
                     <div>
-                      Updated: {latestPriceUpdatedAt ?? "No market update yet"}
+                      Updated: {activeUpdatedAt ?? "No market update yet"}
                     </div>
                   </div>
                 </div>
@@ -475,12 +615,14 @@ export default function CollectionItemsSection({
           {sorted.map((i) => {
             const item = i.item;
             const effectiveMarketPrice = getEffectiveMarketPrice(i);
-            const latestPriceUpdatedAt = formatPriceUpdatedAt(
-              getCatalogPriceUpdatedAt(i)
+            const activeUpdatedAt = formatPriceUpdatedAt(
+              getActivePriceUpdatedAt(i)
             );
             const marketTotal = getRowMarketTotal(i);
             const purchaseTotal = getRowPurchaseTotal(i);
             const rowProfitLoss = getRowProfitLoss(i);
+            const sourceLabel = getPriceSourceLabel(i);
+            const locked = isManualPriceLocked(i);
 
             return (
               <div
@@ -538,6 +680,12 @@ export default function CollectionItemsSection({
                           Custom
                         </div>
                       ) : null}
+
+                      {locked ? (
+                        <div className="inline-flex rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                          Manual Locked
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
@@ -584,8 +732,9 @@ export default function CollectionItemsSection({
                       <div>
                         Market used: ${effectiveMarketPrice.toFixed(2)} each
                       </div>
+                      <div>Source: {sourceLabel}</div>
                       <div>
-                        Updated: {latestPriceUpdatedAt ?? "No market update yet"}
+                        Updated: {activeUpdatedAt ?? "No market update yet"}
                       </div>
                     </div>
                   </div>
@@ -685,7 +834,8 @@ export default function CollectionItemsSection({
         item={modalItem}
         updateItemDetails={updateItemDetails}
         deleteItem={deleteItem}
-        />
+        useAutoPriceAgain={useAutoPriceAgain}
+      />
     </>
   );
 }

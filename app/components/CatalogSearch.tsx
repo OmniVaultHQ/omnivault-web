@@ -14,6 +14,13 @@ This type MUST match what the API returns from:
 
 app/api/catalog/search/route.ts
 */
+/*
+This type MUST match what the API returns from:
+
+app/api/catalog/search/route.ts
+
+If this gets out of sync, UI bugs happen.
+*/
 type Item = {
   id: string;
   name: string;
@@ -24,7 +31,7 @@ type Item = {
   itemNumber?: string | null;
 
   /*
-  NEW: latest market price (flattened in API)
+  Latest saved price returned by the search API
   */
   marketPrice?: number | null;
 };
@@ -257,7 +264,7 @@ setResults(Array.isArray(data) ? data : []);
                       </span>
                     )}
 
-                    {/* Show market price if available */}
+                    {/* Show latest saved market price if available */}
                     {item.marketPrice != null && (
                       <span className="text-xs text-yellow-300">
                         ${item.marketPrice.toFixed(2)}

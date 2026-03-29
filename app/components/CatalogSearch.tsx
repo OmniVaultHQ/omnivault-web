@@ -2,6 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 
+/*
+This type MUST match what the API returns from:
+
+app/api/catalog/search/route.ts
+
+If this gets out of sync, UI bugs happen.
+*/
+/*
+This type MUST match what the API returns from:
+
+app/api/catalog/search/route.ts
+*/
 type Item = {
   id: string;
   name: string;
@@ -9,7 +21,12 @@ type Item = {
   set: string | null;
   imageUrl?: string | null;
   rarity?: string | null;
-  price?: number; // NEW: support price if available
+  itemNumber?: string | null;
+
+  /*
+  NEW: latest market price (flattened in API)
+  */
+  marketPrice?: number | null;
 };
 
 type CollectionOption = {
@@ -130,7 +147,31 @@ setResults(Array.isArray(data) ? data : []);
           ref={inputRef}
           type="text"
           value={query}
-          onChange={(e) => handleSearch(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value;
+
+            /*
+            Keep the input text updated
+            */
+            setQuery(value);
+
+            /*
+            Run catalog search immediately as the user types
+
+            Why this matters:
+            - before, typing only changed local state
+            - results never updated unless Enter was pressed
+            */
+            void handleSearch(value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              /*
+              Allow Enter to manually re-run search too
+              */
+              void handleSearch(query);
+            }
+          }}
           placeholder="Search cards, models, or collectibles..."
           className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none transition focus:border-blue-400/60 focus:ring-2 focus:ring-blue-500/20"
         />
@@ -202,6 +243,13 @@ setResults(Array.isArray(data) ? data : []);
                     {item.set || "Unknown Set"}
                   </p>
 
+                  {/* Show card number (VERY important for collectors) */}
+                  {item.itemNumber && (
+                    <p className="text-xs text-zinc-500">
+                      #{item.itemNumber}
+                    </p>
+                  )}
+
                   <div className="mt-2 flex items-center gap-2">
                     {item.rarity && (
                       <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">
@@ -209,9 +257,10 @@ setResults(Array.isArray(data) ? data : []);
                       </span>
                     )}
 
-                    {item.price != null && (
+                    {/* Show market price if available */}
+                    {item.marketPrice != null && (
                       <span className="text-xs text-yellow-300">
-                        ${item.price.toFixed(2)}
+                        ${item.marketPrice.toFixed(2)}
                       </span>
                     )}
                   </div>

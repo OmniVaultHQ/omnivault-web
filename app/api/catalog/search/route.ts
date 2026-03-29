@@ -2,117 +2,155 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
 /*
-Catalog search route
+File: app/api/catalog/search/route.ts
 
-Supports searching by:
-- name
-- set
-- game
-- item number
+Purpose:
+- Search OmniVault's master catalog
+- Used by the CatalogSearch UI
+- Returns lightweight JSON results for fast rendering
 
-Important:
-- SQLite does NOT support Prisma's mode: "insensitive"
-- this route always returns JSON, even on errors
+Why this version exists:
+- Your current Prisma + SQLite setup does not support:
+  mode: "insensitive"
+- So we load catalog items from the database first
+- Then we do case-insensitive filtering in JavaScript
+- This is fine for your current catalog size
+
+Extra feature:
+- Also returns the latest market price if one exists
 */
+
 export async function GET(req: Request) {
   try {
+    /*
+    Step 1:
+    Read the query from the URL
+
+    Example:
+    /api/catalog/search?q=charizard
+    */
     const { searchParams } = new URL(req.url);
-const query = searchParams.get("q")?.trim();
-
-/*
-Handle number searches like:
-001 → 1
-*/
-const numericQuery =
-  query && /^\d+$/.test(query)
-    ? String(Number(query)) // removes leading zeros
-    : null;
-
-if (!query) {
-  return NextResponse.json([]);
-}
+    const query = searchParams.get("q")?.trim();
 
     /*
-    Search name first
+    Step 2:
+    Empty search returns empty results
     */
-    const nameMatches = await prisma.item.findMany({
+    if (!query) {
+      return NextResponse.json([]);
+    }
+
+    /*
+    Step 3:
+    Normalize search text to lowercase so matching is case-insensitive
+    */
+    const queryLower = query.toLowerCase();
+
+    /*
+    Step 4:
+    If the search is only digits, also normalize number search
+
+    Example:
+    "001" becomes "1"
+    */
+    const numericQuery =
+      /^\d+$/.test(query) ? String(Number(query)) : null;
+
+    /*
+    Step 5:
+    Load catalog items from the database
+
+    IMPORTANT:
+    We only want imported catalog items, not user-created custom items.
+
+    We also load the newest saved price, if one exists.
+    */
+    const allCatalogItems = await prisma.item.findMany({
       where: {
-        name: {
-          contains: query,
+        isCustom: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        game: true,
+        set: true,
+        imageUrl: true,
+        rarity: true,
+        itemNumber: true,
+
+        /*
+        Get latest saved market price for this item
+        */
+        prices: {
+          take: 1,
+          orderBy: {
+            createdAt: "desc",
+          },
+          select: {
+            marketPrice: true,
+          },
         },
       },
-      select: {
-        id: true,
-        name: true,
-        game: true,
-        set: true,
-        imageUrl: true,
-        rarity: true,
-        itemNumber: true,
+      orderBy: {
+        name: "asc",
       },
-      take: 8,
+      take: 500,
     });
 
     /*
-    Search broader fields too
+    Step 6:
+    Do case-insensitive matching in JavaScript
+
+    Why:
+    - avoids SQLite case-sensitivity issues
+    - gives predictable matching right now
     */
-    const otherMatches = await prisma.item.findMany({
-      where: {
-        OR: [
-          {
-            set: {
-              contains: query,
-            },
-          },
-          {
-            game: {
-              contains: query,
-            },
-          },
-          {
-  OR: [
-    {
-      itemNumber: {
-        contains: query,
-      },
-    },
-    ...(numericQuery
-      ? [
-          {
-            itemNumber: {
-              contains: numericQuery,
-            },
-          },
-        ]
-      : []),
-  ],
-}
-        ],
-      },
-      select: {
-        id: true,
-        name: true,
-        game: true,
-        set: true,
-        imageUrl: true,
-        rarity: true,
-        itemNumber: true,
-      },
-      take: 8,
+    const filtered = allCatalogItems.filter((item) => {
+      const name = item.name?.toLowerCase() ?? "";
+      const set = item.set?.toLowerCase() ?? "";
+      const game = item.game?.toLowerCase() ?? "";
+      const itemNumber = item.itemNumber?.toLowerCase() ?? "";
+
+      const matchesText =
+        name.includes(queryLower) ||
+        set.includes(queryLower) ||
+        game.includes(queryLower) ||
+        itemNumber.includes(queryLower);
+
+      /*
+      Extra helper for number searches like:
+      001 -> 1
+      */
+      const matchesNumeric =
+        numericQuery != null &&
+        item.itemNumber != null &&
+        !Number.isNaN(Number(item.itemNumber)) &&
+        String(Number(item.itemNumber)) === numericQuery;
+
+      return matchesText || matchesNumeric;
     });
 
     /*
-    Merge and remove duplicates
+    Step 7:
+    Flatten the latest price into marketPrice so the frontend
+    gets a simpler response shape
     */
-    const seen = new Set<string>();
+    const resultWithPrice = filtered.slice(0, 20).map((item) => ({
+      id: item.id,
+      name: item.name,
+      game: item.game,
+      set: item.set,
+      imageUrl: item.imageUrl,
+      rarity: item.rarity,
+      itemNumber: item.itemNumber,
+      marketPrice: item.prices[0]?.marketPrice ?? null,
+    }));
 
-    const merged = [...nameMatches, ...otherMatches].filter((item) => {
-      if (seen.has(item.id)) return false;
-      seen.add(item.id);
-      return true;
-    });
-
-    return NextResponse.json(merged.slice(0, 10));
+    /*
+    Step 8:
+    Return JSON results to the frontend
+    */
+    return NextResponse.json(resultWithPrice);
   } catch (error) {
     console.error("CATALOG SEARCH ERROR:", error);
 

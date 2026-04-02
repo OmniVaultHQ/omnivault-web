@@ -134,9 +134,17 @@ export default function AddItemForm({
   - Clears image preview
   - Re-syncs collection select back to the current active collection
 
-  Note:
-  If your server action redirects immediately, the page refresh/navigation
-  may happen before the reset is visible. That is normal.
+  IMPORTANT:
+  We use a hidden input for collectionId below.
+  That hidden input is the real value sent to the server action.
+
+  Why:
+  Sometimes with server actions, a controlled <select> can look right in the UI
+  but still submit the wrong value if the DOM/state timing gets weird.
+
+  So:
+  - the visible dropdown is for the user
+  - the hidden input is the backend source of truth
   */
   async function handleSubmit(formData: FormData) {
     await action(formData);
@@ -156,6 +164,18 @@ export default function AddItemForm({
 
   return (
     <form ref={formRef} action={handleSubmit} className="space-y-5">
+      {/*
+        IMPORTANT FIX:
+        This hidden input is what actually gets submitted to the server.
+
+        Why we do this:
+        - guarantees the active selected collection is sent
+        - avoids weird cases where the visible select looks correct
+          but the form submission sends an old value
+        - keeps custom item add flow consistent with the active collection
+      */}
+      <input type="hidden" name="collectionId" value={selectedCollectionId} />
+
       {/* =========================================
           COLLECTION
           Choose which collection receives the item
@@ -165,7 +185,15 @@ export default function AddItemForm({
           Collection
         </label>
         <select
-          name="collectionId"
+          /*
+          IMPORTANT:
+          We REMOVED name="collectionId" from this select.
+
+          Why:
+          - we do not want two different form fields fighting each other
+          - the hidden input above is the real submitted collectionId
+          - this dropdown is only used to control selectedCollectionId in the UI
+          */
           value={selectedCollectionId}
           onChange={(e) => setSelectedCollectionId(e.target.value)}
           className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm outline-none transition focus:border-blue-400/40"

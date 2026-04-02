@@ -16,7 +16,7 @@ import SetCompletionCard from "@/app/components/SetCompletionCard";
 import CollectionTools from "@/app/components/CollectionTools";
 import CollectionItemsSection from "@/app/components/CollectionItemsSection";
 import CollectionValueBreakdown from "@/app/components/CollectionValueBreakdown";
-
+import DashboardCollectionArea from "@/app/components/DashboardCollectionArea";
 
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
@@ -1661,10 +1661,15 @@ const missingValue = sortedMissingItems.reduce(
               Rendered in a client component so cards
               can open the detail modal
              ========================================= */}
-          <div className="mt-5">
-            <CollectionItemsSection
-              sorted={sorted}
+          <DashboardCollectionArea
+              sorted={sorted as any}
               currentView={currentView}
+              isMainCollection={isMainCollection}
+              activeCollectionId={activeCollectionId}
+              collections={collections}
+              addItem={addItem}
+              onAdd={addItemToCollection}
+              defaultCatalogQuery={catalog}
               savePurchasePrice={savePurchasePrice}
               saveMarketPrice={saveMarketPrice}
               updateQuantity={updateQuantity}
@@ -1672,22 +1677,7 @@ const missingValue = sortedMissingItems.reduce(
               updateItemDetails={updateItemDetails}
               useAutoPriceAgain={useAutoPriceAgain}
             />
-          </div>
         </div>
-
-        {/* =========================================
-            COLLECTION TOOLS
-            Placed at bottom on purpose
-           ========================================= */}
-        <CollectionTools
-          isMainCollection={isMainCollection}
-          activeCollectionId={activeCollectionId}
-          collections={collections}
-          addItem={addItem}
-          onAdd={addItemToCollection}
-          defaultCatalogQuery={catalog}
-        />
-
       </div>
     </div>
   );

@@ -14,7 +14,7 @@ Why this exists:
 - modals need client-side state
 */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SubmitButton from "@/app/components/Submitbutton";
 import PriceHistory from "@/app/components/PriceHistory";
 import ItemDetailModal from "@/app/components/ItemDetailModal";
@@ -32,6 +32,7 @@ type PriceEntry = {
 
 /*
 One owned collection row plus linked item data
+
 IMPORTANT:
 - condition belongs to the owned row, not the shared item
 */
@@ -61,12 +62,14 @@ type CollectionRow = {
   */
   lastPriceUpdated?: Date | string | null;
 
-  // Condition saved on the owned collection row
-  // Example: Near Mint, Painted, Sealed
+  /*
+  Condition saved on the owned collection row
+  Example: Near Mint, Painted, Sealed
+  */
   condition: string | null;
   notes: string | null;
 
-    item: {
+  item: {
     id: string;
     name: string;
     game: string;
@@ -102,10 +105,32 @@ export default function CollectionItemsSection({
   useAutoPriceAgain,
 }: Props) {
   /*
+  LOCAL STATE COPY OF ITEMS
+
+  Why:
+  - allows this client component to keep a live copy of the rows
+  - when the server sends updated rows later, we sync back to them
+  - this is the first step toward smoother UI behavior
+  */
+  const [localItems, setLocalItems] = useState(sorted);
+
+  /*
   selectedItemId
   - Stores which collection row is currently open in the modal
   */
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+
+  /*
+  Keep localItems synced with fresh server data.
+
+  Why:
+  - when filters/sorts/search/collection changes happen,
+    the server gives us a new sorted array
+  - this effect makes sure local client state updates too
+  */
+  useEffect(() => {
+    setLocalItems(sorted);
+  }, [sorted]);
 
   /*
   Format a date nicely for the UI
@@ -175,7 +200,7 @@ export default function CollectionItemsSection({
     );
   }
 
-    /*
+  /*
   Fallback market price for catalog items.
 
   Why this exists:
@@ -316,12 +341,62 @@ export default function CollectionItemsSection({
   }
 
   /*
+  Visual style for price source badges.
+  */
+  function getPriceSourceBadgeClass(row: CollectionRow) {
+    const source = getActivePriceSource(row);
+
+    switch (source) {
+      case "manual":
+        return "border-amber-400/30 bg-amber-500/10 text-amber-300";
+      case "simulated":
+        return "border-blue-400/30 bg-blue-500/10 text-blue-300";
+      case "tcgplayer":
+        return "border-purple-400/30 bg-purple-500/10 text-purple-300";
+      case "ebay":
+        return "border-cyan-400/30 bg-cyan-500/10 text-cyan-300";
+      case "pricecharting":
+        return "border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-300";
+      case "purchase fallback":
+        return "border-orange-400/30 bg-orange-500/10 text-orange-300";
+      case "rarity fallback":
+        return "border-yellow-400/30 bg-yellow-500/10 text-yellow-300";
+      default:
+        return "border-white/10 bg-white/5 text-white/60";
+    }
+  }
+
+  /*
+  Color helper for row profit/loss text.
+  */
+  function getProfitLossTextClass(value: number | null) {
+    if (value == null) return "text-white/35";
+    if (value > 0) return "text-green-400";
+    if (value < 0) return "text-red-400";
+    return "text-white/55";
+  }
+
+  /*
+  Format profit/loss for display.
+  */
+  function formatProfitLoss(value: number | null) {
+    if (value == null) return "—";
+    return `${value >= 0 ? "+" : ""}$${value.toFixed(2)}`;
+  }
+
+  /*
   Build the selected modal item from the clicked collection row
+
+  IMPORTANT:
+  Use localItems here, not sorted.
+
+  Why:
+  - the modal should always reflect the same data the screen is rendering
   */
   const modalItem = useMemo(() => {
     if (!selectedItemId) return null;
 
-    const row = sorted.find((x) => x.id === selectedItemId);
+    const row = localItems.find((x) => x.id === selectedItemId);
     if (!row) return null;
 
     const purchasePrice = getPurchasePrice(row);
@@ -361,7 +436,7 @@ export default function CollectionItemsSection({
         source: price.source,
       })),
     };
-  }, [selectedItemId, sorted]);
+  }, [selectedItemId, localItems]);
 
   /*
   Open the detail modal for one row
@@ -392,13 +467,13 @@ export default function CollectionItemsSection({
 
   return (
     <>
-      {sorted.length === 0 ? (
+      {localItems.length === 0 ? (
         <div className="rounded-2xl border border-white/10 bg-white/[0.05] p-6 text-sm text-white/60">
           No items match your filters.
         </div>
       ) : currentView === "list" ? (
         <div className="space-y-4">
-          {sorted.map((i) => {
+          {localItems.map((i) => {
             const item = i.item;
             const effectiveMarketPrice = getEffectiveMarketPrice(i);
             const activeUpdatedAt = formatPriceUpdatedAt(
@@ -482,30 +557,22 @@ export default function CollectionItemsSection({
                 {/* RIGHT: values + inline editors */}
                 <div className="flex w-full flex-col gap-3">
                   <div className="flex justify-end">
-                    <div className="min-w-[180px] rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-right text-xs leading-tight">
-                      <div className="text-white/55">
-                        Cost: ${purchaseTotal.toFixed(2)}
+                    <div className="min-w-[210px] rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-right text-xs leading-tight">
+                      <div className="text-white/45">Cost Basis</div>
+                      <div className="font-medium text-white/80">
+                        ${purchaseTotal.toFixed(2)}
                       </div>
 
-                      <div className="font-medium text-white/85">
-                        Value: ${marketTotal.toFixed(2)}
+                      <div className="mt-2 text-white/45">Market Value</div>
+                      <div className="font-semibold text-white">
+                        ${marketTotal.toFixed(2)}
                       </div>
 
+                      <div className="mt-2 text-white/45">Profit / Loss</div>
                       <div
-                        className={
-                          rowProfitLoss == null
-                            ? "text-white/35"
-                            : rowProfitLoss > 0
-                              ? "text-green-400"
-                              : rowProfitLoss < 0
-                                ? "text-red-400"
-                                : "text-white/55"
-                        }
+                        className={`font-semibold ${getProfitLossTextClass(rowProfitLoss)}`}
                       >
-                        Profit/Loss:{" "}
-                        {rowProfitLoss == null
-                          ? "—"
-                          : `${rowProfitLoss >= 0 ? "+" : ""}$${rowProfitLoss.toFixed(2)}`}
+                        {formatProfitLoss(rowProfitLoss)}
                       </div>
                     </div>
                   </div>
@@ -579,29 +646,25 @@ export default function CollectionItemsSection({
                     </form>
                   </div>
 
-                  <div className="ml-auto text-right text-[11px] text-white/40">
-                    <div>
+                  <div className="ml-auto flex flex-col items-end gap-1 text-right text-[11px]">
+                    <div className="text-white/40">
                       Market used: ${effectiveMarketPrice.toFixed(2)} each
                     </div>
 
-                    <div>Source: {sourceLabel}</div>
+                    <div
+                      className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] ${getPriceSourceBadgeClass(i)}`}
+                    >
+                      {sourceLabel}
+                    </div>
 
                     {priceChange !== null && (
-                      <div
-                        className={
-                          priceChange > 0
-                            ? "text-green-400"
-                            : priceChange < 0
-                              ? "text-red-400"
-                              : "text-white/40"
-                        }
-                      >
+                      <div className={getProfitLossTextClass(priceChange)}>
                         Change: {priceChange >= 0 ? "+" : ""}
                         ${priceChange.toFixed(2)}
                       </div>
                     )}
 
-                    <div>
+                    <div className="text-white/35">
                       Updated: {activeUpdatedAt ?? "No market update yet"}
                     </div>
                   </div>
@@ -612,7 +675,7 @@ export default function CollectionItemsSection({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-          {sorted.map((i) => {
+          {localItems.map((i) => {
             const item = i.item;
             const effectiveMarketPrice = getEffectiveMarketPrice(i);
             const activeUpdatedAt = formatPriceUpdatedAt(
@@ -712,28 +775,23 @@ export default function CollectionItemsSection({
                     </div>
 
                     <div
-                      className={
-                        rowProfitLoss == null
-                          ? "mt-3 text-xs text-white/35"
-                          : rowProfitLoss > 0
-                            ? "mt-3 text-xs text-green-400"
-                            : rowProfitLoss < 0
-                              ? "mt-3 text-xs text-red-400"
-                              : "mt-3 text-xs text-white/55"
-                      }
+                      className={`mt-3 text-xs font-medium ${getProfitLossTextClass(rowProfitLoss)}`}
                     >
-                      Profit/Loss:{" "}
-                      {rowProfitLoss == null
-                        ? "—"
-                        : `${rowProfitLoss >= 0 ? "+" : ""}$${rowProfitLoss.toFixed(2)}`}
+                      Profit/Loss: {formatProfitLoss(rowProfitLoss)}
                     </div>
 
-                    <div className="mt-1 text-[11px] text-white/40">
-                      <div>
+                    <div className="mt-2 space-y-1 text-[11px]">
+                      <div className="text-white/40">
                         Market used: ${effectiveMarketPrice.toFixed(2)} each
                       </div>
-                      <div>Source: {sourceLabel}</div>
-                      <div>
+
+                      <div
+                        className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] ${getPriceSourceBadgeClass(i)}`}
+                      >
+                        {sourceLabel}
+                      </div>
+
+                      <div className="text-white/35">
                         Updated: {activeUpdatedAt ?? "No market update yet"}
                       </div>
                     </div>

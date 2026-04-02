@@ -9,18 +9,6 @@ app/api/catalog/search/route.ts
 
 If this gets out of sync, UI bugs happen.
 */
-/*
-This type MUST match what the API returns from:
-
-app/api/catalog/search/route.ts
-*/
-/*
-This type MUST match what the API returns from:
-
-app/api/catalog/search/route.ts
-
-If this gets out of sync, UI bugs happen.
-*/
 type Item = {
   id: string;
   name: string;
@@ -60,14 +48,30 @@ export default function CatalogSearch({
   const [results, setResults] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [selectedCollectionId, setSelectedCollectionId] = useState(() => {
-  if (typeof window !== "undefined") {
-    return localStorage.getItem("lastCollectionId") || activeCollectionId;
-  }
-  return activeCollectionId;
-});
+  /*
+  selectedCollectionId
 
+  IMPORTANT:
+  The active dashboard collection is the source of truth.
+  We do NOT use localStorage anymore because it caused the wrong collection
+  to be reused later.
+  */
+  const [selectedCollectionId, setSelectedCollectionId] =
+    useState(activeCollectionId);
+
+  /*
+  addedItemId
+  - temporarily marks one item as recently added
+  - used to change the Add button into Added ✓
+  */
   const [addedItemId, setAddedItemId] = useState<string | null>(null);
+
+  /*
+  toastMessage
+  - text shown in the floating success popup
+  - example: "Alakazam added to Pokémon"
+  */
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   /*
   Keep collection selector synced with dashboard
@@ -90,9 +94,11 @@ export default function CatalogSearch({
     }
 
     // Focus search input
-    setTimeout(() => {
+    const id = setTimeout(() => {
       inputRef.current?.focus();
     }, 50);
+
+    return () => clearTimeout(id);
   }, [defaultQuery]);
 
   async function handleSearch(value: string) {
@@ -107,18 +113,18 @@ export default function CatalogSearch({
       setLoading(true);
 
       const res = await fetch(
-  `/api/catalog/search?q=${encodeURIComponent(value)}`
-);
+        `/api/catalog/search?q=${encodeURIComponent(value)}`
+      );
 
-if (!res.ok) {
-  const text = await res.text();
-  console.error("Catalog search request failed:", text);
-  setResults([]);
-  return;
-}
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("Catalog search request failed:", text);
+        setResults([]);
+        return;
+      }
 
-const data = await res.json();
-setResults(Array.isArray(data) ? data : []);
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error("Catalog search failed:", error);
       setResults([]);
@@ -129,23 +135,86 @@ setResults(Array.isArray(data) ? data : []);
 
   async function handleAdd(itemId: string) {
     try {
+      /*
+      Find the item object so we can show its name in the success toast
+      */
+      const item = results.find((result) => result.id === itemId);
+
+      /*
+      Find the currently selected collection so we can show its name too
+      */
+      const collectionName =
+        collections.find((c) => c.id === selectedCollectionId)?.name ??
+        "Collection";
+
+      /*
+      Call the parent add handler
+      */
       await onAdd(itemId, selectedCollectionId);
 
+      /*
+      Show temporary Added ✓ state on the button
+      */
       setAddedItemId(itemId);
 
-      // Reset "Added" state after short delay
+      /*
+      Show floating success toast
+      Example: "Alakazam added to Pokémon"
+      */
+      setToastMessage(
+        `${item?.name ?? "Item"} added to ${collectionName}`
+      );
+
+      /*
+      Reset "Added" state after a short delay
+      */
       setTimeout(() => {
-        setAddedItemId((current) =>
-          current === itemId ? null : current
-        );
+        setAddedItemId((current) => (current === itemId ? null : current));
       }, 1200);
+
+      /*
+      Hide toast after a short delay
+      */
+      setTimeout(() => {
+        setToastMessage((current) =>
+          current === `${item?.name ?? "Item"} added to ${collectionName}`
+            ? null
+            : current
+        );
+      }, 2200);
     } catch (error) {
       console.error("Failed to add item:", error);
+
+      /*
+      Optional error feedback
+      This makes failures less confusing for the user
+      */
+      setToastMessage("Failed to add item");
+
+      setTimeout(() => {
+        setToastMessage((current) =>
+          current === "Failed to add item" ? null : current
+        );
+      }, 2200);
     }
   }
 
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
+      {/*
+        SUCCESS / ERROR TOAST
+
+        Why this exists:
+        - gives immediate feedback after clicking Add
+        - makes OmniVault feel more like a real app
+        - disappears automatically after a short time
+      */}
+      {toastMessage && (
+        <div className="pointer-events-none absolute right-0 top-0 z-20 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300 shadow-lg backdrop-blur">
+          {toastMessage}
+        </div>
+      )}
+
       {/* =========================
           SEARCH INPUT
          ========================= */}
@@ -198,9 +267,16 @@ setResults(Array.isArray(data) ? data : []);
             <select
               value={selectedCollectionId}
               onChange={(e) => {
-                const value = e.target.value;
-                setSelectedCollectionId(value);
-                localStorage.setItem("lastCollectionId", value);
+                /*
+                Update selected collection in UI only.
+
+                We do NOT store this in localStorage anymore.
+
+                Why:
+                - it caused wrong collection to be reused later
+                - active dashboard collection should control everything
+                */
+                setSelectedCollectionId(e.target.value);
               }}
               className="rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-xs text-white outline-none"
             >
@@ -250,7 +326,7 @@ setResults(Array.isArray(data) ? data : []);
                     {item.set || "Unknown Set"}
                   </p>
 
-                  {/* Show card number (VERY important for collectors) */}
+                  {/* Show item/card number if available */}
                   {item.itemNumber && (
                     <p className="text-xs text-zinc-500">
                       #{item.itemNumber}

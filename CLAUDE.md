@@ -9,4 +9,4 @@ Read `docs/PROJECT_BRIEF.md` for the product vision, roadmap and development rul
 - Verify with `npx tsc --noEmit` and `npx eslint <files>`; there is no test suite yet.
 - Record decisions and status in `docs/` (pricing audit: `docs/PRICING_AUDIT.md`).
 
-Dev: `npm run dev` (Next.js 16, Turbopack). If Turbopack panics with "Next.js package not found", delete `.next` and restart. Local DB is SQLite at `prisma/dev.db`.
+Dev: `npm run dev` (Next.js 16, Turbopack). If Turbopack panics with "Next.js package not found", delete `.next` and restart. Local DB is SQLite at `prisma/dev.db`, managed with `npx prisma db push` (stop the dev server first on Windows). **Never run `prisma migrate dev`**: the DB has no migration history and Prisma will offer to wipe it. Back up `dev.db` before schema changes.

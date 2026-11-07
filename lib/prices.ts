@@ -30,6 +30,16 @@ function roundPrice(value: number) {
   return Number(value.toFixed(2));
 }
 
+/*
+Provider dates come in different formats (pokemontcg.io uses "2026/11/06").
+Returns null when missing or unparseable instead of saving a bad date.
+*/
+function parseProviderDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const parsed = new Date(value.replace(/\//g, "-"));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export async function getPriceForItem(itemId: string): Promise<PriceResult | null> {
   const item = await prisma.item.findUnique({
     where: { id: itemId },
@@ -159,16 +169,24 @@ export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome
     roundPrice(latestPrice.marketPrice) !== nextPrice ||
     latestPrice.source !== result.source;
 
+  // Quality info saved with every price row
+  const priceDetails = {
+    currency: "USD", // both providers are queried in USD
+    confidence: result.confidence,
+    sampleSize: result.sampleSize ?? null,
+    providerUpdatedAt: parseProviderDate(result.providerUpdatedAt),
+  };
+
   if (priceChanged) {
     await prisma.itemPrice.create({
-      data: { itemId, marketPrice: nextPrice, source: result.source },
+      data: { itemId, marketPrice: nextPrice, source: result.source, ...priceDetails },
     });
   } else if (latestPrice) {
     // Same price confirmed again: bump lastUpdated (@updatedAt) so we know
     // this price is still current without adding a duplicate history row.
     await prisma.itemPrice.update({
       where: { id: latestPrice.id },
-      data: { marketPrice: nextPrice },
+      data: { marketPrice: nextPrice, ...priceDetails },
     });
   }
 

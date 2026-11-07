@@ -28,7 +28,14 @@ type PriceEntry = {
   createdAt: Date | string;
   source: string;
   lastUpdated?: Date | string;
+  currency?: string;
+  confidence?: string | null;
+  sampleSize?: number | null;
+  providerUpdatedAt?: Date | string | null;
 };
+
+// A provider price whose underlying market data is older than this is "stale"
+const STALE_AFTER_DAYS = 7;
 
 /*
 One owned collection row plus linked item data
@@ -104,6 +111,9 @@ export default function CollectionItemsSection({
   updateItemDetails,
   useAutoPriceAgain,
 }: Props) {
+  // "Now" captured once per mount so render stays pure (used for stale-price checks)
+  const [nowMs] = useState(() => Date.now());
+
   /*
   LOCAL STATE COPY OF ITEMS
 
@@ -228,6 +238,82 @@ export default function CollectionItemsSection({
     }
 
     return "none";
+  }
+
+  /*
+  Quality of the provider price being shown (confidence + data age).
+
+  Only applies when the displayed price came from a provider and matches the
+  newest trusted history row. Manual, purchase-fallback and no-price rows
+  return null (nothing to grade).
+
+  Data age uses the provider's own date when known (TCGplayer data via
+  pokemontcg.io can lag weeks behind), otherwise when we last confirmed it.
+  */
+  function getPriceQuality(row: CollectionRow) {
+    const source = getActivePriceSource(row);
+    const latest = row.item.prices?.[0];
+    if (!latest || latest.source !== source) return null;
+
+    const dataDateRaw = latest.providerUpdatedAt ?? latest.lastUpdated ?? latest.createdAt;
+    const dataDate = dataDateRaw ? new Date(dataDateRaw) : null;
+    const ageDays =
+      dataDate && !Number.isNaN(dataDate.getTime())
+        ? (nowMs - dataDate.getTime()) / (24 * 60 * 60 * 1000)
+        : null;
+
+    return {
+      confidence: latest.confidence ?? null,
+      sampleSize: latest.sampleSize ?? null,
+      dataDate,
+      isStale: ageDays !== null && ageDays > STALE_AFTER_DAYS,
+    };
+  }
+
+  // One-line summary for the detail modal, e.g. "Low confidence · 6 listings · data from Oct 15, 2026"
+  function getPriceQualityLabel(row: CollectionRow): string | null {
+    const quality = getPriceQuality(row);
+    if (!quality) return null;
+
+    const parts: string[] = [];
+    if (quality.confidence) parts.push(`${quality.confidence[0].toUpperCase()}${quality.confidence.slice(1)} confidence`);
+    if (quality.sampleSize) parts.push(`${quality.sampleSize} listings`);
+    if (quality.dataDate) {
+      parts.push(
+        `data from ${quality.dataDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${quality.isStale ? " (stale)" : ""}`
+      );
+    }
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
+
+  function renderPriceQualityBadges(row: CollectionRow) {
+    const quality = getPriceQuality(row);
+    if (!quality) return null;
+
+    const dataDateLabel = quality.dataDate
+      ? quality.dataDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      : null;
+
+    return (
+      <div className="flex flex-wrap justify-end gap-1">
+        {quality.confidence === "low" && (
+          <span
+            className="inline-flex rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300"
+            title={`Rough estimate${quality.sampleSize ? ` from ${quality.sampleSize} listings` : ""}: active asking prices, not sales`}
+          >
+            Low confidence
+          </span>
+        )}
+        {quality.isStale && (
+          <span
+            className="inline-flex rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] text-white/60"
+            title={`Latest market data is from ${dataDateLabel}`}
+          >
+            Data from {dataDateLabel}
+          </span>
+        )}
+      </div>
+    );
   }
 
   /*
@@ -406,6 +492,7 @@ export default function CollectionItemsSection({
       updatedAtLabel,
       manualPriceLocked: isManualPriceLocked(row),
       activePriceSource: getPriceSourceLabel(row),
+      priceQualityLabel: getPriceQualityLabel(row),
       history: row.item.prices.map((price) => ({
         id: price.id,
         marketPrice: price.marketPrice,
@@ -656,6 +743,8 @@ export default function CollectionItemsSection({
                       {sourceLabel}
                     </div>
 
+                    {renderPriceQualityBadges(i)}
+
                     {priceChange !== null && (
                       <div className={getProfitLossTextClass(priceChange)}>
                         Change: {priceChange >= 0 ? "+" : ""}
@@ -789,6 +878,8 @@ export default function CollectionItemsSection({
                       >
                         {sourceLabel}
                       </div>
+
+                      {renderPriceQualityBadges(i)}
 
                       <div className="text-white/35">
                         Updated: {activeUpdatedAt ?? "No market update yet"}

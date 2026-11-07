@@ -190,7 +190,18 @@ model ItemPrice {
   itemId      String
   marketPrice Float
   source      String   @default("manual")
+
+  // ISO 4217 currency of marketPrice
+  currency    String   @default("USD")
+  // high | medium | low (null for rows saved before this was tracked)
+  confidence  String?
+  // number of listings/sales behind the price (eBay), when known
+  sampleSize  Int?
+  // when the provider itself last updated this price (e.g. TCGplayer updatedAt)
+  providerUpdatedAt DateTime?
+
   createdAt   DateTime @default(now())
+  // bumped whenever a refresh re-confirms this price
   lastUpdated DateTime @updatedAt
 
   item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)

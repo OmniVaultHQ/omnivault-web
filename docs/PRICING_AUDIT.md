@@ -47,7 +47,11 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
 - **2026-11-07 — pokemontcg.io retries** (`07c1e59`): measured ~40% random 5xx; now 3 attempts with backoff.
 - **2026-11-07 — Trusted history** (`b2a29b7`): `lib/price-history.ts` holds the shared trust rules; dashboard history, Change, movers, set completion and the portfolio chart skip overruled/non-provider rows. Chart now carries last known prices forward and sums quantity across collections. Verified by the user on the dashboard.
 
-Next: Step B.
+- **2026-11-07 — Step B**: `ItemPrice` gains `currency` (default USD), `confidence`, `sampleSize`, `providerUpdatedAt`; saved on every refresh. Rows show "Low confidence" (eBay with <8 listings) and "Data from <date>" when market data is >7 days old; detail modal shows a one-line quality summary.
+  - Finding: pokemontcg.io's TCGplayer data lags (gym2-2 `updatedAt` 2026/10/15 on 2026-11-07), so TCGplayer prices will often show as stale. That's accurate, not a bug. A direct TCGplayer or PriceCharting source would fix freshness.
+  - **Schema workflow:** `dev.db` was built with `prisma db push` (no `_prisma_migrations` table; the 4 migration folders were never applied). Use `npx prisma db push` for dev changes. **Never run `prisma migrate dev` against it** — it will offer to reset (wipe) the DB. Before production (Postgres), create a fresh baseline migration from the current schema.
+
+Next: Step C (provider registry, category-aware eBay filters, faster refresh) or Step D (tests).
 
 ## Proposed order of work
 

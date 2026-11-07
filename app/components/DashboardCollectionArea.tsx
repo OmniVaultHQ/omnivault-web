@@ -13,6 +13,10 @@ type PriceEntry = {
   createdAt: Date | string;
   source: string;
   lastUpdated?: Date | string;
+  currency?: string;
+  confidence?: string | null;
+  sampleSize?: number | null;
+  providerUpdatedAt?: Date | string | null;
 };
 
 /*

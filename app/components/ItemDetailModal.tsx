@@ -32,6 +32,8 @@ type ItemDetailModalItem = {
   updatedAtLabel: string | null;
   manualPriceLocked?: boolean;
   activePriceSource?: string | null;
+  // e.g. "Low confidence · 6 listings · data from Oct 15, 2026"
+  priceQualityLabel?: string | null;
   history: {
     id: string;
     marketPrice: number;
@@ -251,6 +253,9 @@ export default function ItemDetailModal({
                 <div className="mt-1 text-xs text-white/50">
                   Source: {item.activePriceSource ?? "Unknown"}
                 </div>
+                {item.priceQualityLabel && (
+                  <div className="mt-1 text-xs text-white/40">{item.priceQualityLabel}</div>
+                )}
 
                 {/* Recent price movement */}
                 {priceChange && (

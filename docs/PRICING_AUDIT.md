@@ -42,20 +42,20 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
 
 ## Progress log
 
-- **2026-11-07 — Step A done** (`625ebbd`): issues 1–4 fixed. Existing `estimated-rarity`/`manual` rows were left in place (none in the dev DB).
-- **2026-11-07 — Trusted-source rule** (`7ed990a`): a TCGplayer price from the last 7 days is kept over an eBay result (pokemontcg.io outages were swapping Charizard's $954.65 for eBay's $331). Re-confirmed prices bump `ItemPrice.lastUpdated`.
-- **2026-11-07 — pokemontcg.io retries** (`07c1e59`): measured ~40% random 5xx; now 3 attempts with backoff.
-- **2026-11-07 — Trusted history** (`b2a29b7`): `lib/price-history.ts` holds the shared trust rules; dashboard history, Change, movers, set completion and the portfolio chart skip overruled/non-provider rows. Chart now carries last known prices forward and sums quantity across collections. Verified by the user on the dashboard.
+- **2026-11-07 — Step A done** (`4206010`): issues 1–4 fixed. Existing `estimated-rarity`/`manual` rows were left in place (none in the dev DB).
+- **2026-11-07 — Trusted-source rule** (`dc60969`): a TCGplayer price from the last 7 days is kept over an eBay result (pokemontcg.io outages were swapping Charizard's $954.65 for eBay's $331). Re-confirmed prices bump `ItemPrice.lastUpdated`.
+- **2026-11-07 — pokemontcg.io retries** (`f5dc529`): measured ~40% random 5xx; now 3 attempts with backoff.
+- **2026-11-07 — Trusted history** (`d229197`): `lib/price-history.ts` holds the shared trust rules; dashboard history, Change, movers, set completion and the portfolio chart skip overruled/non-provider rows. Chart now carries last known prices forward and sums quantity across collections. Verified by the user on the dashboard.
 
 - **2026-11-07 — Step B**: `ItemPrice` gains `currency` (default USD), `confidence`, `sampleSize`, `providerUpdatedAt`; saved on every refresh. Rows show "Low confidence" (eBay with <8 listings) and "Data from <date>" when market data is >7 days old; detail modal shows a one-line quality summary.
   - Finding: pokemontcg.io's TCGplayer data lags (gym2-2 `updatedAt` 2026/10/15 on 2026-11-07), so TCGplayer prices will often show as stale. That's accurate, not a bug. A direct TCGplayer or PriceCharting source would fix freshness.
   - **Schema workflow:** `dev.db` was built with `prisma db push` (no `_prisma_migrations` table; the 4 migration folders were never applied). Use `npx prisma db push` for dev changes. **Never run `prisma migrate dev` against it** — it will offer to reset (wipe) the DB. Before production (Postgres), create a fresh baseline migration from the current schema.
 
-  - Verified by the user on the dashboard after a refresh (all 3 cards: tcgplayer, high, data from Oct 15, 2026). Date labels fixed to UTC (`acae614`).
+  - Verified by the user on the dashboard after a refresh (all 3 cards: tcgplayer, high, data from Oct 15, 2026). Date labels fixed to UTC (`e8eb6a2`).
   - Observed: dashboard refresh took 8.4s for 3 items (sequential + retries) — addressed in Step C.
 
-- **2026-11-07 — Step C** (`8d2cf7b`, `cc5e0e7`): `PRICE_PROVIDERS` registry; eBay exclusions split into common + per-category (card results unchanged on 19 sample titles; repro/box-only/manual-only/KO/for-parts/damaged now excluded); `Item.priceCheckedAt` (db push) so refresh skips items checked recently (dashboard: 1h, cron: 12h); 4 items priced in parallel; shared eBay token request; pokemontcg.io 3s per-attempt timeout with timeouts retried.
-  - Verified by the user: second click 67 ms (nothing re-fetched); trust rule kept Charizard $954.65 and Blastoise $170.64 when pokemontcg.io failed. First click was 11.6s because of a 10s hang (fixed in `cc5e0e7`; live test 1.8–5s for 3 cards).
+- **2026-11-07 — Step C** (`442c7dc`, `e1fed3d`): `PRICE_PROVIDERS` registry; eBay exclusions split into common + per-category (card results unchanged on 19 sample titles; repro/box-only/manual-only/KO/for-parts/damaged now excluded); `Item.priceCheckedAt` (db push) so refresh skips items checked recently (dashboard: 1h, cron: 12h); 4 items priced in parallel; shared eBay token request; pokemontcg.io 3s per-attempt timeout with timeouts retried.
+  - Verified by the user: second click 67 ms (nothing re-fetched); trust rule kept Charizard $954.65 and Blastoise $170.64 when pokemontcg.io failed. First click was 11.6s because of a 10s hang (fixed in `e1fed3d`; live test 1.8–5s for 3 cards).
   - **Biggest remaining accuracy/speed risk: pokemontcg.io reliability.** Even with 3 attempts about half of lookups failed during testing. Options: free `POKEMON_TCG_API_KEY`, or a direct TCGplayer / PriceCharting provider.
 
 ## Decision: Pokémon price source (2026-11-07)

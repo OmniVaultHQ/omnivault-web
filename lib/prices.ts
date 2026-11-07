@@ -11,12 +11,30 @@ Safety rules before a price is saved:
 - Simulated prices are never written unless PRICING_ALLOW_SIMULATED=true
 - A low/medium-confidence price that jumps more than 5x up or down from the
   last saved real price is treated as a probable wrong match and rejected
+- A TCGplayer price from the last 7 days is never replaced by an eBay price
+  (provider outage != price change)
 */
 
 const MAX_JUMP_RATIO = 5;
 
 // ItemPrice sources that are not real market data from a provider
 const NON_PROVIDER_SOURCES = ["manual", "simulated", "estimated-rarity"];
+/*
+How much each provider's price is trusted. A recent price from a higher-trust
+source is not replaced by a lower-trust one (see savePriceForItem).
+- tcgplayer: market price from actual sales
+- ebay: median of active listings (asking prices)
+*/
+const SOURCE_TRUST: Record<string, number> = {
+  tcgplayer: 3,
+  ebay: 1,
+};
+const TRUSTED_PRICE_MAX_AGE_HOURS = 7 * 24;
+
+function getSourceTrust(source: string): number {
+  return SOURCE_TRUST[source] ?? 0;
+}
+
 const DEFAULT_STALE_HOURS = 12;
 const DEFAULT_BATCH_LIMIT = 200;
 
@@ -53,7 +71,8 @@ export type SavePriceOutcome =
   | { status: "no-price" }
   | { status: "rejected"; reason: string; candidate: PriceResult; previous: number }
   | { status: "unchanged"; price: number; source: string; syncedRows: number }
-  | { status: "saved"; price: number; source: string; syncedRows: number };
+  | { status: "saved"; price: number; source: string; syncedRows: number }
+  | { status: "kept"; price: number; source: string; reason: string; syncedRows: number };
 
 export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome> {
   const result = await getPriceForItem(itemId);
@@ -61,12 +80,66 @@ export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome
 
   const nextPrice = roundPrice(result.marketPrice);
 
+  /*
+  Don't downgrade: if a more trusted source (e.g. TCGplayer) priced this item
+  recently, a weaker source (e.g. eBay asking prices) does not replace it just
+  because the trusted provider had a temporary outage. The trusted price stays,
+  with its real "last updated" time so the UI shows how old it is.
+  */
+  const resultTrust = getSourceTrust(result.source);
+  const trustedCutoff = new Date(Date.now() - TRUSTED_PRICE_MAX_AGE_HOURS * 60 * 60 * 1000);
+  const moreTrustedSources = Object.keys(SOURCE_TRUST).filter(
+    (source) => getSourceTrust(source) > resultTrust
+  );
+
+  if (moreTrustedSources.length > 0) {
+    const recentTrusted = await prisma.itemPrice.findFirst({
+      where: {
+        itemId,
+        source: { in: moreTrustedSources },
+        lastUpdated: { gte: trustedCutoff },
+      },
+      orderBy: { lastUpdated: "desc" },
+      select: { marketPrice: true, source: true, lastUpdated: true },
+    });
+
+    if (recentTrusted) {
+      console.warn("[pricing] kept recent trusted price instead of weaker source", {
+        itemId,
+        kept: `${recentTrusted.marketPrice} (${recentTrusted.source})`,
+        candidate: `${nextPrice} (${result.source})`,
+      });
+
+      await prisma.item.update({
+        where: { id: itemId },
+        data: { marketPrice: recentTrusted.marketPrice },
+      });
+
+      const sync = await prisma.collectionItem.updateMany({
+        where: { itemId, manualPriceLocked: false },
+        data: {
+          marketPrice: recentTrusted.marketPrice,
+          priceSource: recentTrusted.source,
+          lastPriceUpdated: recentTrusted.lastUpdated,
+        },
+      });
+
+      return {
+        status: "kept",
+        price: recentTrusted.marketPrice,
+        source: recentTrusted.source,
+        reason: `${result.source} result ignored; ${recentTrusted.source} price from ${recentTrusted.lastUpdated.toISOString()} is still recent`,
+        syncedRows: sync.count,
+      };
+    }
+  }
+
   // Baseline = last price from a real provider. Older rows may hold manual,
   // simulated or rarity-guess values; those must not decide what is "suspicious".
   const latestPrice = await prisma.itemPrice.findFirst({
     where: { itemId, source: { notIn: NON_PROVIDER_SOURCES } },
     orderBy: { createdAt: "desc" },
-    select: { marketPrice: true, source: true },
+    select: { id: true, marketPrice: true, source: true },
   });
 
   // Sanity guard against wrong matches
@@ -101,6 +174,13 @@ export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome
   if (priceChanged) {
     await prisma.itemPrice.create({
       data: { itemId, marketPrice: nextPrice, source: result.source },
+    });
+  } else if (latestPrice) {
+    // Same price confirmed again: bump lastUpdated (@updatedAt) so we know
+    // this price is still current without adding a duplicate history row.
+    await prisma.itemPrice.update({
+      where: { id: latestPrice.id },
+      data: { marketPrice: nextPrice },
     });
   }
 

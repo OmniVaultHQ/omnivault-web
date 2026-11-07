@@ -156,6 +156,10 @@ model Item {
   purchasePrice Float?
   marketPrice   Float?
 
+  // When a pricing refresh last tried this item (any outcome). Used to skip
+  // items checked recently so refreshes are fast and save API quota.
+  priceCheckedAt DateTime?
+
   catalogCollection CatalogCollection? @relation(fields: [catalogCollectionId], references: [id], onDelete: SetNull)
 
   userItems       UserItem[]

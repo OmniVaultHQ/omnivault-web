@@ -24,6 +24,9 @@ Safety rules before a price is saved:
 const MAX_JUMP_RATIO = 5;
 
 const DEFAULT_STALE_HOURS = 12;
+
+// Items priced in parallel per refresh (keeps under pokemontcg.io / eBay rate limits)
+const REFRESH_CONCURRENCY = 4;
 const DEFAULT_BATCH_LIMIT = 200;
 
 function roundPrice(value: number) {
@@ -214,34 +217,58 @@ export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome
   };
 }
 
+/*
+Price several items at once (REFRESH_CONCURRENCY at a time) instead of one by
+one. Each item is stamped with priceCheckedAt after its attempt, whatever the
+outcome (saved, kept, rejected, no price), so the next refresh can skip it.
+Errors are not stamped, so they are retried next time.
+*/
 export async function updatePricesForItems(itemIds: string[]) {
   const uniqueIds = [...new Set(itemIds.filter(Boolean))];
   const results: Array<{ itemId: string; result: SavePriceOutcome | { status: "error"; message: string } }> = [];
 
-  for (const itemId of uniqueIds) {
-    try {
-      results.push({ itemId, result: await savePriceForItem(itemId) });
-    } catch (error) {
-      results.push({
-        itemId,
-        result: { status: "error", message: error instanceof Error ? error.message : String(error) },
-      });
+  let next = 0;
+  async function worker() {
+    while (next < uniqueIds.length) {
+      const itemId = uniqueIds[next++];
+      try {
+        const result = await savePriceForItem(itemId);
+        await prisma.item.update({ where: { id: itemId }, data: { priceCheckedAt: new Date() } });
+        results.push({ itemId, result });
+      } catch (error) {
+        results.push({
+          itemId,
+          result: { status: "error", message: error instanceof Error ? error.message : String(error) },
+        });
+      }
     }
   }
+
+  await Promise.all(
+    Array.from({ length: Math.min(REFRESH_CONCURRENCY, uniqueIds.length) }, () => worker())
+  );
 
   return results;
 }
 
 /*
-Refresh only catalog items someone actually owns, and only if their owned rows
-have not been priced in the last `staleHours`.
+Refresh only catalog items someone actually owns, and only if a refresh hasn't
+tried them in the last `staleHours` (Item.priceCheckedAt).
 
 Why: after "import all Pokémon" the catalog has tens of thousands of items.
 Pricing all of them every refresh would blow through eBay's daily call limit
 and pokemontcg.io's rate limit for no benefit.
+
+Options:
+- userId:  only this user's owned items
+- itemIds: only these items (e.g. the collection currently on screen)
+- staleHours: skip items checked more recently than this (0 = re-price all)
+- limit: max items per run
+Custom items and manually locked rows are never auto-priced.
 */
 export async function refreshStaleOwnedItems(options?: {
   userId?: string;
+  itemIds?: string[];
   staleHours?: number;
   limit?: number;
 }) {
@@ -252,13 +279,16 @@ export async function refreshStaleOwnedItems(options?: {
   const rows = await prisma.collectionItem.findMany({
     where: {
       ...(options?.userId ? { userId: options.userId } : {}),
+      ...(options?.itemIds ? { itemId: { in: options.itemIds } } : {}),
       manualPriceLocked: false,
-      item: { isCustom: false },
-      OR: [{ lastPriceUpdated: null }, { lastPriceUpdated: { lt: cutoff } }],
+      item: {
+        isCustom: false,
+        OR: [{ priceCheckedAt: null }, { priceCheckedAt: { lt: cutoff } }],
+      },
     },
     select: { itemId: true },
     distinct: ["itemId"],
-    orderBy: { lastPriceUpdated: "asc" },
+    orderBy: { item: { priceCheckedAt: "asc" } },
     take: limit,
   });
 

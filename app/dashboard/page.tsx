@@ -7,7 +7,7 @@ import { auth } from "@/auth";
 import { getOrCreateDefaultCollection } from "@/lib/collections";
 
 import SubmitButton from "@/app/components/Submitbutton";
-import { updatePricesForItems } from "@/lib/prices";
+import { refreshStaleOwnedItems } from "@/lib/prices";
 import { filterTrustedHistory } from "@/lib/price-history";
 import PortfolioSummaryCards from "@/app/components/PortfolioSummaryCards";
 import DashboardHeader from "@/app/components/DashboardHeader";
@@ -25,6 +25,9 @@ import path from "path";
 // Always run this page on the server so the dashboard stays fresh
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// "Refresh Prices" skips items a refresh already checked within this window
+const DASHBOARD_REFRESH_STALE_HOURS = 1;
 
 /**
  * Next.js can hand searchParams in as:
@@ -177,10 +180,7 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
       },
     });
 
-    const itemIds = currentRows.map((row) => row.itemId);
-
-    // Remove duplicate item ids before price refresh
-    const uniqueIds = [...new Set(itemIds)];
+    const uniqueIds = [...new Set(currentRows.map((row) => row.itemId))];
 
     // If there is nothing to update, just refresh the page
     if (uniqueIds.length === 0) {
@@ -188,8 +188,13 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
       return;
     }
 
-    // Run your pricing logic
-    await updatePricesForItems(uniqueIds);
+    // Price the items on screen in parallel, skipping ones a refresh already
+    // checked in the last hour (and custom / manually locked items)
+    await refreshStaleOwnedItems({
+      userId,
+      itemIds: uniqueIds,
+      staleHours: DASHBOARD_REFRESH_STALE_HOURS,
+    });
 
     // Re-render dashboard
     revalidatePath("/dashboard");

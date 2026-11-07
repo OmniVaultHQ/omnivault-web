@@ -50,19 +50,48 @@ export type PriceResult = {
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /* =========================================================
-   ROUTER
+   PROVIDER REGISTRY
+   ---------------------------------------------------------
+   Each provider says which items it can price and how.
+   getBestProviderPrice tries them in order and returns the
+   first trustworthy result.
+
+   To add a provider (e.g. PriceCharting for video games):
+   1. write getXPrice(item) returning PriceResult | null
+   2. add { id, supports, getPrice } to PRICE_PROVIDERS at the
+      right priority
+   3. give its source a trust level in lib/price-history.ts
    ========================================================= */
+
+export type PriceProvider = {
+  id: string;
+  supports: (item: PricingItem) => boolean;
+  getPrice: (item: PricingItem) => Promise<PriceResult | null>;
+};
+
+export const PRICE_PROVIDERS: PriceProvider[] = [
+  {
+    // TCGplayer market price via pokemontcg.io (needs the card's API id)
+    id: "tcgplayer",
+    supports: (item) => isPokemon(item) && Boolean(item.externalId),
+    getPrice: getPokemonTcgPrice,
+  },
+  {
+    // eBay active listings, any category with enough identifying info
+    id: "ebay",
+    supports: (item) => !item.isCustom && Boolean(item.name?.trim()),
+    getPrice: getPriceFromEbay,
+  },
+];
 
 export async function getBestProviderPrice(
   item: PricingItem
 ): Promise<PriceResult | null> {
-  if (isPokemon(item) && item.externalId) {
-    const tcg = await getPokemonTcgPrice(item);
-    if (tcg) return tcg;
+  for (const provider of PRICE_PROVIDERS) {
+    if (!provider.supports(item)) continue;
+    const result = await provider.getPrice(item);
+    if (result) return result;
   }
-
-  const ebay = await getPriceFromEbay(item);
-  if (ebay) return ebay;
 
   if (process.env.PRICING_ALLOW_SIMULATED === "true") {
     return getSimulatedPrice(item);
@@ -189,17 +218,50 @@ const EBAY_CCG_SINGLES_CATEGORY = "183454";
 const EBAY_MIN_MATCHES = 3;
 
 /*
-Listing titles containing any of these are not a single, raw copy of the item.
-Graded terms are excluded because catalog prices are for ungraded copies.
+Listing titles containing any of these are not a single, complete, authentic,
+ungraded copy of the item. Split by category so e.g. "manual only" is caught
+for video games without hurting card searches.
 */
-const EXCLUDED_TITLE_TERMS = [
-  "lot", "bundle", "bulk", "set of", "complete set", "playset",
-  "proxy", "custom", "orica", "replica", "fake", "reprint", "fan art", "metal card",
-  "digital", "code card", "online code",
-  "you pick", "you choose", "pick your", "choose your", "u pick",
-  "psa", "bgs", "cgc", "sgc", "beckett", "graded", "slab",
-  "empty", "sleeve only", "case only", "binder",
+type ItemKind = "card" | "video-game" | "figure" | "comic" | "other";
+
+// Every category: multiples, fakes, damaged/partial items, graded copies
+// (catalog prices are for ungraded copies)
+const COMMON_EXCLUDED_TERMS = [
+  "lot", "bundle", "bulk", "set of",
+  "proxy", "custom", "replica", "fake", "reprint", "repro", "reproduction",
+  "bootleg", "knockoff", "knock off", "counterfeit",
+  "for parts", "parts only", "broken", "not working", "damaged",
+  "empty", "box only", "case only", "manual only", "digital",
+  "psa", "bgs", "cgc", "sgc", "beckett", "graded", "slab", "wata", "vga", "cbcs",
 ];
+
+const KIND_EXCLUDED_TERMS: Record<ItemKind, string[]> = {
+  card: [
+    "complete set", "playset", "orica", "fan art", "metal card",
+    "code card", "online code",
+    "you pick", "you choose", "pick your", "choose your", "u pick",
+    "sleeve only", "binder",
+  ],
+  "video-game": ["insert only", "label only", "artwork only", "cover only", "disc only"],
+  figure: ["ko", "accessory only", "accessories only", "parts lot", "head only"],
+  comic: ["facsimile", "cover only", "coverless"],
+  other: [],
+};
+
+function getItemKind(item: PricingItem): ItemKind {
+  const category = normalize(`${item.category ?? ""}`);
+  if (isPokemon(item) || category.includes("card")) return "card";
+  if (category.includes("video game") || category.includes("console") || category === "game" || category === "games") {
+    return "video-game";
+  }
+  if (["figure", "statue", "funko", "model", "miniature"].some((k) => category.includes(k))) return "figure";
+  if (category.includes("comic") || category.includes("manga")) return "comic";
+  return "other";
+}
+
+function getExcludedTerms(item: PricingItem): string[] {
+  return [...COMMON_EXCLUDED_TERMS, ...KIND_EXCLUDED_TERMS[getItemKind(item)]];
+}
 
 const LANGUAGE_TERMS = ["japanese", "japan", "korean", "chinese", "german", "french", "italian", "spanish"];
 
@@ -278,8 +340,7 @@ async function getPriceFromEbay(item: PricingItem): Promise<PriceResult | null> 
 }
 
 function isCard(item: PricingItem): boolean {
-  const category = normalize(item.category ?? "");
-  return category.includes("card") || isPokemon(item);
+  return getItemKind(item) === "card";
 }
 
 /*
@@ -318,8 +379,8 @@ export function titleMatchesItem(rawTitle: string, item: PricingItem): boolean {
     return false;
   }
 
-  // 3. No lots, proxies, graded slabs, etc.
-  if (EXCLUDED_TITLE_TERMS.some((term) => containsWord(title, term))) {
+  // 3. No lots, fakes, partial/damaged items, graded copies (per category)
+  if (getExcludedTerms(item).some((term) => containsWord(title, term))) {
     return false;
   }
 
@@ -352,15 +413,30 @@ function containsWord(haystack: string, term: string): boolean {
   return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`).test(haystack);
 }
 
+// Shared in-flight token request, so parallel refresh workers fetch one token
+let ebayTokenRequest: Promise<string | null> | null = null;
+
 async function getEbayApplicationToken(
   clientId: string,
   clientSecret: string
 ): Promise<string | null> {
-  const now = Date.now();
-  if (ebayTokenCache && ebayTokenCache.expiresAtMs > now + 60_000) {
+  if (ebayTokenCache && ebayTokenCache.expiresAtMs > Date.now() + 60_000) {
     return ebayTokenCache.accessToken;
   }
 
+  if (!ebayTokenRequest) {
+    ebayTokenRequest = requestEbayApplicationToken(clientId, clientSecret).finally(() => {
+      ebayTokenRequest = null;
+    });
+  }
+  return ebayTokenRequest;
+}
+
+async function requestEbayApplicationToken(
+  clientId: string,
+  clientSecret: string
+): Promise<string | null> {
+  const now = Date.now();
   const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
   const response = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {

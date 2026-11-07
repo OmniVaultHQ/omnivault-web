@@ -54,7 +54,11 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
   - Verified by the user on the dashboard after a refresh (all 3 cards: tcgplayer, high, data from Oct 15, 2026). Date labels fixed to UTC (`acae614`).
   - Observed: dashboard refresh took 8.4s for 3 items (sequential + retries) — addressed in Step C.
 
-Next: Step C (provider registry, category-aware eBay filters, faster refresh) or Step D (tests).
+- **2026-11-07 — Step C** (`8d2cf7b`, `cc5e0e7`): `PRICE_PROVIDERS` registry; eBay exclusions split into common + per-category (card results unchanged on 19 sample titles; repro/box-only/manual-only/KO/for-parts/damaged now excluded); `Item.priceCheckedAt` (db push) so refresh skips items checked recently (dashboard: 1h, cron: 12h); 4 items priced in parallel; shared eBay token request; pokemontcg.io 3s per-attempt timeout with timeouts retried.
+  - Verified by the user: second click 67 ms (nothing re-fetched); trust rule kept Charizard $954.65 and Blastoise $170.64 when pokemontcg.io failed. First click was 11.6s because of a 10s hang (fixed in `cc5e0e7`; live test 1.8–5s for 3 cards).
+  - **Biggest remaining accuracy/speed risk: pokemontcg.io reliability.** Even with 3 attempts about half of lookups failed during testing. Options: free `POKEMON_TCG_API_KEY`, or a direct TCGplayer / PriceCharting provider.
+
+Next: Step D (tests).
 
 ## Proposed order of work
 

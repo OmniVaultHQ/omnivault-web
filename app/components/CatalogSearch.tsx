@@ -1,339 +1,394 @@
 "use client";
 
-/*
-This component runs on the CLIENT because it uses:
-- React state
-- browser fetch requests
-- router.refresh()
-*/
-
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 /*
-Represents one catalog item returned from /api/catalog
+This type MUST match what the API returns from:
+
+app/api/catalog/search/route.ts
+
+If this gets out of sync, UI bugs happen.
 */
-type CatalogItem = {
+type Item = {
   id: string;
   name: string;
-  game: string;
-  set: string;
-  imageUrl: string | null;
-  price: number | null;
-  rarity: string | null;
-  setCode: string | null;
-  itemNumber: string | null;
+  game: string | null;
+  set: string | null;
+  imageUrl?: string | null;
+  rarity?: string | null;
+  itemNumber?: string | null;
+
+  /*
+  Latest saved price returned by the search API
+  */
+  marketPrice?: number | null;
 };
 
-/*
-Button state for each result row.
+type CollectionOption = {
+  id: string;
+  name: string;
+};
 
-idle    = normal Add button
-adding  = request in progress
-added   = success feedback
-error   = temporary failure feedback
-*/
-type Status = "idle" | "adding" | "added" | "error";
-
-/*
-Props passed from dashboard/page.tsx
-
-collections:
-All collections the user owns
-
-activeCollectionId:
-The collection selected by default
-
-defaultQuery:
-Optional starting search text coming from the URL
-Example:
- /dashboard?catalog=Dark%20Magician
-*/
 type Props = {
-  collections: { id: string; name: string }[];
+  onAdd: (itemId: string, collectionId: string) => Promise<void>;
+  collections: CollectionOption[];
   activeCollectionId: string;
   defaultQuery?: string;
 };
 
 export default function CatalogSearch({
+  onAdd,
   collections,
   activeCollectionId,
   defaultQuery = "",
 }: Props) {
-  /*
-  q
-  Search text typed by the user
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  Starts with defaultQuery if one was provided from the URL.
-  This lets links like:
-  /dashboard?catalog=Dark%20Magician
-  open the catalog with that search already filled in.
-  */
-  const [q, setQ] = useState(defaultQuery);
-
-  /*
-  items
-  Search results returned from the catalog API
-  */
-  const [items, setItems] = useState<CatalogItem[]>([]);
-
-  /*
-  loading
-  True while search request is running
-  */
+  const [query, setQuery] = useState(defaultQuery);
+  const [results, setResults] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
 
   /*
-  collectionId
-  Which collection to add items into
+  selectedCollectionId
+
+  IMPORTANT:
+  The active dashboard collection is the source of truth.
+  We do NOT use localStorage anymore because it caused the wrong collection
+  to be reused later.
   */
-  const [collectionId, setCollectionId] = useState(activeCollectionId);
+  const [selectedCollectionId, setSelectedCollectionId] =
+    useState(activeCollectionId);
 
   /*
-  router
-  Used to refresh dashboard data after adding an item
+  addedItemId
+  - temporarily marks one item as recently added
+  - used to change the Add button into Added ✓
   */
-  const router = useRouter();
+  const [addedItemId, setAddedItemId] = useState<string | null>(null);
 
   /*
-  statusById
-  Stores button status per item ID
-
-  Example:
-  {
-    "abc123": "adding",
-    "xyz999": "added"
-  }
+  toastMessage
+  - text shown in the floating success popup
+  - example: "Alakazam added to Pokémon"
   */
-  const [statusById, setStatusById] = useState<Record<string, Status>>({});
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   /*
-  timer
-  Used for debounce so we do not call the API on every keystroke
-  */
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  /*
-  canSearch
-  Only search when user typed at least 2 characters
-  */
-  const canSearch = useMemo(() => q.trim().length >= 2, [q]);
-
-  /*
-  Keep local collection selector synced if active collection changes
+  Keep collection selector synced with dashboard
   */
   useEffect(() => {
-    setCollectionId(activeCollectionId);
+    setSelectedCollectionId(activeCollectionId);
   }, [activeCollectionId]);
 
   /*
-  Keep local catalog search synced if the dashboard URL changes.
-  Example:
-  user clicks a missing-item "Search" shortcut in Set Completion
+  When arriving from "missing item search"
+  - preload query
+  - auto search
+  - focus input
   */
   useEffect(() => {
-    setQ(defaultQuery);
+    setQuery(defaultQuery);
+
+    if (defaultQuery.trim()) {
+      void handleSearch(defaultQuery);
+    }
+
+    // Focus search input
+    const id = setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+
+    return () => clearTimeout(id);
   }, [defaultQuery]);
 
-  /*
-  SEARCH EFFECT
+  async function handleSearch(value: string) {
+    setQuery(value);
 
-  Flow:
-  1. Clear previous debounce timer
-  2. If text too short, stop
-  3. Wait 250ms
-  4. Fetch /api/catalog
-  5. Store results
-  */
-  useEffect(() => {
-    if (timer.current) clearTimeout(timer.current);
-
-    if (!canSearch) {
-      setItems([]);
-      setLoading(false);
+    if (!value.trim()) {
+      setResults([]);
       return;
     }
 
-    timer.current = setTimeout(async () => {
+    try {
       setLoading(true);
 
-      try {
-        const res = await fetch(`/api/catalog?q=${encodeURIComponent(q.trim())}`);
-        const data = await res.json();
+      const res = await fetch(
+        `/api/catalog/search?q=${encodeURIComponent(value)}`
+      );
 
-        // Only keep results if API gave us an array
-        setItems(Array.isArray(data.items) ? data.items : []);
-      } catch {
-        // If API fails, clear results
-        setItems([]);
-      } finally {
-        setLoading(false);
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("Catalog search request failed:", text);
+        setResults([]);
+        return;
       }
-    }, 250);
 
-    // Cleanup if component rerenders/unmounts
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, [q, canSearch]);
-
-  /*
-  ADD ITEM TO COLLECTION
-
-  Flow:
-  1. Mark button as "Adding..."
-  2. Send POST request
-  3. If success, show "Added!"
-  4. Refresh dashboard data
-  5. Reset button after short delay
-  */
-  async function addToCollection(item: CatalogItem) {
-    setStatusById((prev) => ({ ...prev, [item.id]: "adding" }));
-
-    try {
-      const res = await fetch("/api/collection/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itemId: item.id,
-          quantity: 1,
-          collectionId,
-        }),
-      });
-
-      if (!res.ok) throw new Error("Failed");
-
-      // Success state
-      setStatusById((prev) => ({ ...prev, [item.id]: "added" }));
-
-      // Refresh dashboard so the added item appears immediately
-      router.refresh();
-
-      // Reset button back to idle
-      setTimeout(() => {
-        setStatusById((prev) => ({ ...prev, [item.id]: "idle" }));
-      }, 650);
-    } catch {
-      // Error state
-      setStatusById((prev) => ({ ...prev, [item.id]: "error" }));
-
-      setTimeout(() => {
-        setStatusById((prev) => ({ ...prev, [item.id]: "idle" }));
-      }, 900);
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Catalog search failed:", error);
+      setResults([]);
+    } finally {
+      setLoading(false);
     }
   }
 
-  /*
-  UI
-  */
+  async function handleAdd(itemId: string) {
+    try {
+      /*
+      Find the item object so we can show its name in the success toast
+      */
+      const item = results.find((result) => result.id === itemId);
+
+      /*
+      Find the currently selected collection so we can show its name too
+      */
+      const collectionName =
+        collections.find((c) => c.id === selectedCollectionId)?.name ??
+        "Collection";
+
+      /*
+      Call the parent add handler
+      */
+      await onAdd(itemId, selectedCollectionId);
+
+      /*
+      Show temporary Added ✓ state on the button
+      */
+      setAddedItemId(itemId);
+
+      /*
+      Show floating success toast
+      Example: "Alakazam added to Pokémon"
+      */
+      setToastMessage(
+        `${item?.name ?? "Item"} added to ${collectionName}`
+      );
+
+      /*
+      Reset "Added" state after a short delay
+      */
+      setTimeout(() => {
+        setAddedItemId((current) => (current === itemId ? null : current));
+      }, 1200);
+
+      /*
+      Hide toast after a short delay
+      */
+      setTimeout(() => {
+        setToastMessage((current) =>
+          current === `${item?.name ?? "Item"} added to ${collectionName}`
+            ? null
+            : current
+        );
+      }, 2200);
+    } catch (error) {
+      console.error("Failed to add item:", error);
+
+      /*
+      Optional error feedback
+      This makes failures less confusing for the user
+      */
+      setToastMessage("Failed to add item");
+
+      setTimeout(() => {
+        setToastMessage((current) =>
+          current === "Failed to add item" ? null : current
+        );
+      }, 2200);
+    }
+  }
+
   return (
-    <div className="w-full max-w-2xl">
-      {/* Section title */}
-      <div className="mb-1 text-xl font-semibold">Catalog</div>
+    <div className="relative space-y-4">
+      {/*
+        SUCCESS / ERROR TOAST
 
-      {/* Section helper text */}
-      <div className="mb-3 text-sm text-white/70">
-        Search the item catalog and add items to your collection.
-      </div>
-
-      {/* SEARCH INPUT */}
-      <input
-        autoFocus
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search (min 2 chars)..."
-        className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 outline-none transition focus:border-white/30"
-      />
-
-      {/* Hint shown before user starts typing */}
-      {!q && (
-        <div className="mt-3 text-sm text-white/55">
-          Start typing to search the catalog.
+        Why this exists:
+        - gives immediate feedback after clicking Add
+        - makes OmniVault feel more like a real app
+        - disappears automatically after a short time
+      */}
+      {toastMessage && (
+        <div className="pointer-events-none absolute right-0 top-0 z-20 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300 shadow-lg backdrop-blur">
+          {toastMessage}
         </div>
       )}
 
-      {/* RESULTS SECTION */}
-      <div className="mt-3 space-y-3">
-        {loading && <div className="px-1 text-sm text-white/70">Searching…</div>}
+      {/* =========================
+          SEARCH INPUT
+         ========================= */}
+      <div className="space-y-2">
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => {
+            const value = e.target.value;
 
-        {canSearch && !loading && items.length > 0 && (
-          <div className="px-1 text-xs text-white/40">{items.length} results</div>
-        )}
+            /*
+            Keep the input text updated
+            */
+            setQuery(value);
 
-        {canSearch && !loading && items.length === 0 && (
-          <div className="px-1 text-sm text-white/55">No items found.</div>
-        )}
+            /*
+            Run catalog search immediately as the user types
 
-        {items.map((item) => {
-          const status = statusById[item.id] ?? "idle";
-          const disabled = status === "adding" || status === "added";
+            Why this matters:
+            - before, typing only changed local state
+            - results never updated unless Enter was pressed
+            */
+            void handleSearch(value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              /*
+              Allow Enter to manually re-run search too
+              */
+              void handleSearch(query);
+            }
+          }}
+          placeholder="Search cards, models, or collectibles..."
+          className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none transition focus:border-blue-400/60 focus:ring-2 focus:ring-blue-500/20"
+        />
+
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-zinc-500">
+            {loading
+              ? "Searching catalog..."
+              : query.trim()
+              ? `${results.length} result${results.length === 1 ? "" : "s"}`
+              : "Search your catalog"}
+          </p>
+
+          {/* COLLECTION PICKER */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-zinc-500">Add to</label>
+            <select
+              value={selectedCollectionId}
+              onChange={(e) => {
+                /*
+                Update selected collection in UI only.
+
+                We do NOT store this in localStorage anymore.
+
+                Why:
+                - it caused wrong collection to be reused later
+                - active dashboard collection should control everything
+                */
+                setSelectedCollectionId(e.target.value);
+              }}
+              className="rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-xs text-white outline-none"
+            >
+              {collections.map((collection) => (
+                <option key={collection.id} value={collection.id}>
+                  {collection.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* =========================
+          RESULTS
+         ========================= */}
+      <div className="space-y-3">
+        {results.map((item) => {
+          const wasAdded = addedItemId === item.id;
 
           return (
             <div
               key={item.id}
-              className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 transition hover:bg-white/[0.06]"
+              className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/20 hover:bg-white/[0.05]"
             >
-              {/* LEFT SIDE
-                  Item image + item info
-              */}
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-black/30 text-[10px] text-white/40">
+              {/* LEFT SIDE */}
+              <div className="flex min-w-0 items-center gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-black/30">
                   {item.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={item.imageUrl}
                       alt={item.name}
                       className="h-full w-full object-cover"
                     />
                   ) : (
-                    "No Image"
+                    <span className="text-xs text-zinc-500">No Img</span>
                   )}
                 </div>
 
                 <div className="min-w-0">
-                  <div className="truncate font-medium">{item.name}</div>
+                  <p className="truncate text-sm font-semibold text-white">
+                    {item.name}
+                  </p>
 
-                  <div className="truncate text-xs text-white/60">
-                    {item.game} • {item.set}
-                    {item.price != null ? ` • $${item.price.toFixed(2)}` : ""}
+                  <p className="mt-1 truncate text-xs text-zinc-400">
+                    {item.game || "Unknown Game"} •{" "}
+                    {item.set || "Unknown Set"}
+                  </p>
+
+                  {/* Show item/card number if available */}
+                  {item.itemNumber && (
+                    <p className="text-xs text-zinc-500">
+                      #{item.itemNumber}
+                    </p>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-2">
+                    {item.rarity && (
+                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">
+                        {item.rarity}
+                      </span>
+                    )}
+
+                    {/* Show latest saved market price if available */}
+                    {item.marketPrice != null && (
+                      <span className="text-xs text-yellow-300">
+                        ${item.marketPrice.toFixed(2)}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
 
-              {/* RIGHT SIDE
-                  Collection selector + Add button
-              */}
-              <div className="ml-4 flex shrink-0 items-center gap-2">
-                <select
-                  value={collectionId}
-                  onChange={(e) => setCollectionId(e.target.value)}
-                  className="rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-xs outline-none"
-                >
-                  {collections.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-
+              {/* RIGHT SIDE */}
+              <div className="flex flex-col items-end gap-2">
                 <button
-                  onClick={() => addToCollection(item)}
-                  disabled={disabled}
-                  className="rounded-lg bg-white px-4 py-1.5 text-sm font-semibold text-black transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-70"
+                  type="button"
+                  onClick={() => handleAdd(item.id)}
+                  disabled={wasAdded}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                    wasAdded
+                      ? "bg-emerald-600 text-white"
+                      : "bg-blue-500 text-white hover:bg-blue-400"
+                  }`}
                 >
-                  {status === "adding"
-                    ? "Adding…"
-                    : status === "added"
-                      ? "Added!"
-                      : status === "error"
-                        ? "Error"
-                        : "Add"}
+                  {wasAdded ? "Added ✓" : "Add"}
                 </button>
+
+                {wasAdded && (
+                  <span className="text-xs text-emerald-400">
+                    Added to{" "}
+                    {
+                      collections.find(
+                        (c) => c.id === selectedCollectionId
+                      )?.name
+                    }
+                  </span>
+                )}
               </div>
             </div>
           );
         })}
       </div>
+
+      {/* =========================
+          EMPTY STATE
+         ========================= */}
+      {!loading && query.trim() && results.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-center text-sm text-zinc-400">
+          No matching catalog items found.
+        </div>
+      )}
     </div>
   );
 }

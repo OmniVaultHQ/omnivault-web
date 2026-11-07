@@ -7,7 +7,8 @@ import { auth } from "@/auth";
 import { getOrCreateDefaultCollection } from "@/lib/collections";
 
 import SubmitButton from "@/app/components/Submitbutton";
-import { updatePricesForItems } from "@/lib/prices";
+import { refreshStaleOwnedItems } from "@/lib/prices";
+import { filterTrustedHistory } from "@/lib/price-history";
 import PortfolioSummaryCards from "@/app/components/PortfolioSummaryCards";
 import DashboardHeader from "@/app/components/DashboardHeader";
 import CollectionControls from "@/app/components/CollectionControls";
@@ -16,7 +17,7 @@ import SetCompletionCard from "@/app/components/SetCompletionCard";
 import CollectionTools from "@/app/components/CollectionTools";
 import CollectionItemsSection from "@/app/components/CollectionItemsSection";
 import CollectionValueBreakdown from "@/app/components/CollectionValueBreakdown";
-
+import DashboardCollectionArea from "@/app/components/DashboardCollectionArea";
 
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
@@ -24,6 +25,9 @@ import path from "path";
 // Always run this page on the server so the dashboard stays fresh
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// "Refresh Prices" skips items a refresh already checked within this window
+const DASHBOARD_REFRESH_STALE_HOURS = 1;
 
 /**
  * Next.js can hand searchParams in as:
@@ -40,6 +44,7 @@ type SearchParamsMaybePromise =
       cid?: string | string[];
       sort?: string | string[];
       view?: string | string[];
+      missingSort?: string | string[];
     }
   | Promise<
       | {
@@ -48,6 +53,7 @@ type SearchParamsMaybePromise =
           cid?: string | string[];
           sort?: string | string[];
           view?: string | string[];
+          missingSort?: string | string[];
         }
       | undefined
     >
@@ -129,6 +135,10 @@ export default async function DashboardPage({
   const cid = normalizeStr(sp?.cid).trim();
   const sort = normalizeStr(sp?.sort).trim();
   const catalog = normalizeStr(sp?.catalog).trim();
+  /*
+How to sort the missing items list in Set Completion
+*/
+const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price_desc";
 
   // Read current view mode from the URL
   const view = normalizeStr(sp?.view).trim().toLowerCase();
@@ -170,10 +180,7 @@ export default async function DashboardPage({
       },
     });
 
-    const itemIds = currentRows.map((row) => row.itemId);
-
-    // Remove duplicate item ids before price refresh
-    const uniqueIds = [...new Set(itemIds)];
+    const uniqueIds = [...new Set(currentRows.map((row) => row.itemId))];
 
     // If there is nothing to update, just refresh the page
     if (uniqueIds.length === 0) {
@@ -181,12 +188,57 @@ export default async function DashboardPage({
       return;
     }
 
-    // Run your pricing logic
-    await updatePricesForItems(uniqueIds);
+    // Price the items on screen in parallel, skipping ones a refresh already
+    // checked in the last hour (and custom / manually locked items)
+    await refreshStaleOwnedItems({
+      userId,
+      itemIds: uniqueIds,
+      staleHours: DASHBOARD_REFRESH_STALE_HOURS,
+    });
 
     // Re-render dashboard
     revalidatePath("/dashboard");
   }
+  
+  async function addItemToCollection(
+  itemId: string,
+  collectionId: string
+): Promise<void> {
+  "use server";
+
+  const session = await auth();
+  if (!session?.user?.id) return;
+
+  // Only allow adding to a collection this user owns
+  const ownedCollection = await prisma.collection.findFirst({
+    where: { id: collectionId, userId: session.user.id },
+    select: { id: true },
+  });
+  if (!ownedCollection) return;
+
+  await prisma.collectionItem.upsert({
+    where: {
+      userId_itemId_collectionId: {
+        userId: session.user.id,
+        itemId,
+        collectionId,
+      },
+    },
+    update: {
+      quantity: {
+        increment: 1,
+      },
+    },
+    create: {
+      userId: session.user.id,
+      itemId,
+      collectionId,
+      quantity: 1,
+    },
+  });
+
+  revalidatePath("/dashboard");
+}
 
   /**
    * Logout action
@@ -286,6 +338,13 @@ export default async function DashboardPage({
     // Basic validation
     if (!game || !set || !name || !selectedCollectionId) return;
 
+    // Only allow adding to a collection this user owns
+    const ownedCollection = await prisma.collection.findFirst({
+      where: { id: selectedCollectionId, userId },
+      select: { id: true },
+    });
+    if (!ownedCollection) return;
+
     // Final image URL can come from:
     // 1. manually pasted URL
     // 2. uploaded image file saved to /public/uploads
@@ -360,28 +419,30 @@ export default async function DashboardPage({
     // purchasePrice belongs on CollectionItem, not Item,
     // because each user can pay a different amount
     await prisma.collectionItem.upsert({
-      where: {
-        collectionId_itemId: {
-          collectionId: selectedCollectionId,
-          itemId: item.id,
-        },
-      },
-      create: {
-          userId,
-          collectionId: selectedCollectionId,
-          itemId: item.id,
-          quantity,
-          purchasePrice: safePurchasePrice,
-          condition,
-        },
-      update: {
-        quantity: { increment: quantity },
-      },
-    });
+  where: {
+    userId_itemId_collectionId: {
+      userId,
+      itemId: item.id,
+      collectionId: selectedCollectionId,
+    },
+  },
+  create: {
+    userId,
+    collectionId: selectedCollectionId,
+    itemId: item.id,
+    quantity,
+    purchasePrice: safePurchasePrice,
+    condition,
+  },
+  update: {
+    quantity: { increment: quantity },
+  },
+});
 
     revalidatePath("/dashboard");
     redirect(`/dashboard?cid=${selectedCollectionId}&view=${currentView}`);
   }
+  
 
   /**
    * Delete a collection item row
@@ -392,8 +453,9 @@ export default async function DashboardPage({
     const id = String(formData.get("id") ?? "").trim();
     if (!id) return;
 
-    await prisma.collectionItem.delete({
-      where: { id },
+    // deleteMany scoped by userId so users can only delete their own rows
+    await prisma.collectionItem.deleteMany({
+      where: { id, userId },
     });
 
     revalidatePath("/dashboard");
@@ -412,8 +474,8 @@ export default async function DashboardPage({
 
     const quantity = Number.isFinite(raw) ? Math.max(1, raw) : 1;
 
-    await prisma.collectionItem.update({
-      where: { id },
+    await prisma.collectionItem.updateMany({
+      where: { id, userId },
       data: { quantity },
     });
 
@@ -433,8 +495,8 @@ export default async function DashboardPage({
 
     const parsed = raw === "" ? null : Number(raw);
 
-    await prisma.collectionItem.update({
-      where: { id },
+    await prisma.collectionItem.updateMany({
+      where: { id, userId },
       data: {
         purchasePrice:
           parsed !== null && Number.isFinite(parsed) ? parsed : null,
@@ -445,54 +507,92 @@ export default async function DashboardPage({
   }
 
   /**
-   * Save manual market price
-   *
-   * Also creates an ItemPrice history row
-   * so chart/history components update too.
-   */
-  async function saveMarketPrice(formData: FormData): Promise<void> {
-    "use server";
+ * Save manual market price (on this user's row only)
+ *
+ * We also save:
+ * - priceSource = "manual"
+ * - lastPriceUpdated = now
+ * on the CollectionItem row so the dashboard can show
+ * where the price came from and when it was last changed.
+ */
+async function saveMarketPrice(formData: FormData): Promise<void> {
+  "use server";
 
-    const id = String(formData.get("id") ?? "").trim();
-    const raw = String(formData.get("marketPrice") ?? "").trim();
+  const id = String(formData.get("id") ?? "").trim();
+  const raw = String(formData.get("marketPrice") ?? "").trim();
 
-    if (!id) return;
+  if (!id) return;
 
-    const parsed = raw === "" ? null : Number(raw);
-    const safeMarketPrice =
-      parsed !== null && Number.isFinite(parsed) ? parsed : null;
+  const parsed = raw === "" ? null : Number(raw);
+  const safeMarketPrice =
+    parsed !== null && Number.isFinite(parsed) ? parsed : null;
 
-    const collectionRow = await prisma.collectionItem.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        itemId: true,
-      },
-    });
+  const collectionRow = await prisma.collectionItem.findFirst({
+    where: { id, userId },
+    select: {
+      id: true,
+      itemId: true,
+    },
+  });
 
-    if (!collectionRow) return;
+  if (!collectionRow) return;
 
-    // Save manual price on the collection row
+  // Build one timestamp so both row update + history row feel consistent
+  const now = new Date();
+
+  // Save manual price on the collection row
     await prisma.collectionItem.update({
-      where: { id },
-      data: {
-        marketPrice: safeMarketPrice,
-      },
-    });
+    where: { id },
+    data: {
+      marketPrice: safeMarketPrice,
 
-    // Also store a history row so charts can use it later
-    if (safeMarketPrice !== null) {
-      await prisma.itemPrice.create({
-        data: {
-          itemId: collectionRow.itemId,
-          marketPrice: safeMarketPrice,
-          source: "manual",
-        },
-      });
-    }
+      // Mark this price as a manual override entered by the user
+      priceSource: safeMarketPrice !== null ? "manual" : null,
 
-    revalidatePath("/dashboard");
-  }
+      // Lock the row when user enters a manual market price
+      manualPriceLocked: safeMarketPrice !== null,
+
+      // Only set last update time when we actually have a market price
+      lastPriceUpdated: safeMarketPrice !== null ? now : null,
+    },
+  });
+
+  // Manual prices stay on this user's row only. ItemPrice history is shared
+  // by every user who owns this catalog item, so it holds provider prices only.
+
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Unlock manual pricing for one collection row
+ *
+ * What this does:
+ * - clears the row-level manual market price
+ * - clears manual source metadata
+ * - turns auto pricing back on
+ *
+ * After unlocking:
+ * - the next refresh can sync simulated/API pricing again
+ * - the UI falls back to catalog/shared pricing if one exists
+ */
+async function useAutoPriceAgain(formData: FormData): Promise<void> {
+  "use server";
+
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return;
+
+  await prisma.collectionItem.updateMany({
+    where: { id, userId },
+    data: {
+      marketPrice: null,
+      priceSource: null,
+      lastPriceUpdated: null,
+      manualPriceLocked: false,
+    },
+  });
+
+  revalidatePath("/dashboard");
+}
 
   async function updateItemDetails(formData: FormData): Promise<void> {
   "use server";
@@ -524,8 +624,8 @@ export default async function DashboardPage({
       ? parsedMarket
       : null;
 
-  const collectionRow = await prisma.collectionItem.findUnique({
-    where: { id },
+  const collectionRow = await prisma.collectionItem.findFirst({
+    where: { id, userId },
     select: {
       id: true,
       itemId: true,
@@ -534,7 +634,10 @@ export default async function DashboardPage({
 
   if (!collectionRow) return;
 
-  await prisma.collectionItem.update({
+  // Use one timestamp for this update cycle
+  const now = new Date();
+
+    await prisma.collectionItem.update({
     where: { id },
     data: {
       condition,
@@ -542,18 +645,21 @@ export default async function DashboardPage({
       quantity,
       purchasePrice: safePurchasePrice,
       marketPrice: safeMarketPrice,
+
+      /*
+      If the user manually entered a market price in the edit form,
+      mark the row as manual and stamp the update time.
+
+      If they cleared the market price, clear source + last update too.
+      */
+      priceSource: safeMarketPrice !== null ? "manual" : null,
+      manualPriceLocked: safeMarketPrice !== null,
+      lastPriceUpdated: safeMarketPrice !== null ? now : null,
     },
   });
 
-  if (safeMarketPrice !== null) {
-    await prisma.itemPrice.create({
-      data: {
-        itemId: collectionRow.itemId,
-        marketPrice: safeMarketPrice,
-        source: "manual",
-      },
-    });
-  }
+  // Manual prices stay on this user's row only. ItemPrice history is shared
+  // by every user who owns this catalog item, so it holds provider prices only.
 
   revalidatePath("/dashboard");
 }
@@ -565,9 +671,12 @@ export default async function DashboardPage({
   /**
    * Load collection items
    *
-   * Includes newest 10 price history rows for each linked item
+   * Includes the newest 10 trusted price history rows for each linked item.
+   * More rows are loaded, then filtered with filterTrustedHistory so history,
+   * "Change" and catalog price skip manual/simulated rows and eBay prices
+   * that were overruled by a recent TCGplayer price.
    */
-  const items: CollectionItemWithItem[] = await prisma.collectionItem.findMany({
+  const rawItems: CollectionItemWithItem[] = await prisma.collectionItem.findMany({
     where: isMainCollection ? { userId } : { collectionId: activeCollectionId },
     orderBy: { id: "desc" },
     include: {
@@ -575,12 +684,20 @@ export default async function DashboardPage({
         include: {
           prices: {
             orderBy: { lastUpdated: "desc" },
-            take: 10,
+            take: 50,
           },
         },
       },
     },
   });
+
+  const items: CollectionItemWithItem[] = rawItems.map((row) => ({
+    ...row,
+    item: {
+      ...row.item,
+      prices: filterTrustedHistory(row.item.prices).slice(0, 10),
+    },
+  }));
 
   // ==================================================
   // PRICE HELPERS
@@ -597,36 +714,50 @@ export default async function DashboardPage({
    * Manual market price saved on collection row
    */
   function getManualMarketPrice(item: CollectionItemWithItem) {
-    return (item as any).marketPrice ?? null;
+    return item.marketPrice ?? null;
   }
 
   /**
    * Purchase price saved on collection row
    */
   function getPurchasePrice(item: CollectionItemWithItem) {
-    return (item as any).purchasePrice ?? null;
+    return item.purchasePrice ?? null;
   }
 
   /**
-   * Effective market price priority:
-   * 1. manual market price on collection row
-   * 2. latest catalog/shared price
-   * 3. purchase price fallback
-   * 4. zero
-   */
-  function getEffectiveMarketPrice(item: CollectionItemWithItem) {
-    const manual = getManualMarketPrice(item);
-    const catalog = getCatalogMarketPrice(item);
-    const purchase = getPurchasePrice(item);
+ * Where the current collection row market price came from
+ * Examples:
+ * - manual
+ * - simulated
+ * - tcgplayer
+ */
+function getPriceSource(item: CollectionItemWithItem) {
+  return item.priceSource ?? null;
+}
 
-    return manual ?? catalog ?? purchase ?? 0;
-  }
+/**
+ * When the current collection row market price was last updated
+ */
+function getLastPriceUpdated(item: CollectionItemWithItem) {
+  return item.lastPriceUpdated ?? null;
+}
+
+/**
+ * Effective market price priority:
+ * 1. market price on the owned row (manual override or last synced provider price)
+ * 2. latest saved catalog price from a provider
+ * 3. purchase price (shown in the UI as "Purchase Fallback")
+ * Otherwise null: the item has no price yet. Never invent one (no rarity guesses).
+ */
+function getEffectiveMarketPrice(item: CollectionItemWithItem): number | null {
+  return getManualMarketPrice(item) ?? getCatalogMarketPrice(item) ?? getPurchasePrice(item);
+}
 
   /**
    * Total market value for this row
    */
   function getRowMarketTotal(item: CollectionItemWithItem) {
-    return getEffectiveMarketPrice(item) * item.quantity;
+    return (getEffectiveMarketPrice(item) ?? 0) * item.quantity;
   }
 
   /**
@@ -698,24 +829,45 @@ export default async function DashboardPage({
   // DASHBOARD STATS (PORTFOLIO SUMMARY)
   // ==================================================
 
-  // Number of distinct collection rows
-  const totalUnique = items.length;
+  /*
+    Dashboard summary should reflect the currently loaded collection rows.
 
-  // Sum of all quantities owned
-  const totalOwned = items.reduce((sum, i) => sum + (i.quantity ?? 0), 0);
+    Why this exists:
+    - keeps the summary cards in sync with the active collection
+    - avoids confusion if we later change how rows are filtered or loaded
+    - makes all summary math use one consistent source
+    */
+    const summaryRows = filtered;
+    /*
+    Number of distinct owned rows
+    */
+    const totalUnique = summaryRows.length;
 
-  // Total market value of the active collection
-  const collectionValue = items.reduce((sum, i) => {
-    return sum + getRowMarketTotal(i);
-  }, 0);
+    /*
+    Sum of all owned quantity
+    */
+    const totalOwned = summaryRows.reduce((sum, row) => {
+      return sum + (row.quantity ?? 0);
+    }, 0);
 
-  // Total amount paid (purchasePrice * qty)
-  const costBasis = items.reduce((sum, i) => {
-    return sum + getRowPurchaseTotal(i);
-  }, 0);
+    /*
+    Total current market value
+    */
+    const collectionValue = summaryRows.reduce((sum, row) => {
+      return sum + getRowMarketTotal(row);
+    }, 0);
 
-  // Profit/loss across the full collection
-  const totalProfitLoss = collectionValue - costBasis;
+    /*
+    Total amount paid
+    */
+    const costBasis = summaryRows.reduce((sum, row) => {
+      return sum + getRowPurchaseTotal(row);
+    }, 0);
+
+    /*
+    Portfolio profit / loss
+    */
+    const totalProfitLoss = collectionValue - costBasis;
 
   /* ============================================================
    COLLECTION PERFORMANCE CALCULATION
@@ -860,24 +1012,27 @@ const collectionTotals = collections
 
    How it works:
    1. Load all price history rows for items in the current view
-   2. Group rows by calendar day
-   3. For each day, keep the latest saved price per item
-   4. Multiply each item's latest price by owned quantity
-   5. Sum everything into one daily portfolio total
+   2. Keep only trusted rows (filterTrustedHistory: no manual/simulated
+      rows, no eBay prices overruled by a recent TCGplayer price)
+   3. Walk the days in order, carrying each item's last known price
+      forward so a day where only some items were priced doesn't count
+      the others as $0
+   4. Daily value = sum of (last known price x owned quantity)
+   Items with no price yet are left out (never guessed).
    ============================================================ */
 
-/* Track owned quantity per item so we can multiply price × quantity */
+/* Owned quantity per item (summed: the same item can be in several collections) */
 const quantityByItemId = new Map<string, number>();
 
 for (const row of items) {
-  quantityByItemId.set(row.item.id, row.quantity);
+  quantityByItemId.set(row.item.id, (quantityByItemId.get(row.item.id) ?? 0) + row.quantity);
 }
 
 /* Only load history for items currently shown */
-const currentItemIds = Array.from(new Set(items.map((i) => i.item.id)));
+const currentItemIds = Array.from(quantityByItemId.keys());
 
 /* Pull all saved price history rows for those items */
-const priceHistoryRows =
+const allPriceHistoryRows =
   currentItemIds.length > 0
     ? await prisma.itemPrice.findMany({
         where: {
@@ -891,59 +1046,58 @@ const priceHistoryRows =
         select: {
           itemId: true,
           marketPrice: true,
+          source: true,
           createdAt: true,
+          lastUpdated: true,
         },
       })
     : [];
 
-/* Group price rows by readable day label */
-const rowsByDay = new Map<
-  string,
-  { itemId: string; marketPrice: number; createdAt: Date }[]
->();
+/* Apply the trusted-history rules per item */
+const historyRowsByItemId = new Map<string, typeof allPriceHistoryRows>();
+for (const row of allPriceHistoryRows) {
+  const list = historyRowsByItemId.get(row.itemId) ?? [];
+  list.push(row);
+  historyRowsByItemId.set(row.itemId, list);
+}
+
+const priceHistoryRows = Array.from(historyRowsByItemId.values())
+  .flatMap((rows) => filterTrustedHistory(rows))
+  .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+/* Group price rows by calendar day (ISO key keeps years apart and sorts correctly) */
+const rowsByDay = new Map<string, typeof priceHistoryRows>();
 
 for (const row of priceHistoryRows) {
-  const dayLabel = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(row.createdAt));
-
-  const existing = rowsByDay.get(dayLabel) ?? [];
+  const dayKey = new Date(row.createdAt).toISOString().slice(0, 10);
+  const existing = rowsByDay.get(dayKey) ?? [];
   existing.push(row);
-  rowsByDay.set(dayLabel, existing);
+  rowsByDay.set(dayKey, existing);
 }
 
 /* Final chart arrays */
 let chartLabels: string[] = [];
 let chartValues: number[] = [];
 
-/* For each day, keep only the newest saved price per item */
-for (const [dayLabel, dayRows] of rowsByDay.entries()) {
-  const latestPriceByItemId = new Map<
-    string,
-    { marketPrice: number; createdAt: Date }
-  >();
+/* Last known price per item, carried forward across days */
+const lastKnownPriceByItemId = new Map<string, number>();
 
-  for (const row of dayRows) {
-    const existing = latestPriceByItemId.get(row.itemId);
-
-    if (!existing || new Date(row.createdAt) > new Date(existing.createdAt)) {
-      latestPriceByItemId.set(row.itemId, {
-        marketPrice: row.marketPrice,
-        createdAt: row.createdAt,
-      });
-    }
+for (const dayKey of Array.from(rowsByDay.keys()).sort()) {
+  // Rows are in time order, so the last one per item wins for the day
+  for (const row of rowsByDay.get(dayKey) ?? []) {
+    lastKnownPriceByItemId.set(row.itemId, row.marketPrice);
   }
 
-  /* Sum daily portfolio value */
   let dailyPortfolioValue = 0;
-
-  for (const [itemId, latestPrice] of latestPriceByItemId.entries()) {
-    const quantity = quantityByItemId.get(itemId) ?? 0;
-    dailyPortfolioValue += latestPrice.marketPrice * quantity;
+  for (const [itemId, price] of lastKnownPriceByItemId.entries()) {
+    dailyPortfolioValue += price * (quantityByItemId.get(itemId) ?? 0);
   }
 
-  chartLabels.push(dayLabel);
+  chartLabels.push(
+    new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(
+      new Date(`${dayKey}T00:00:00Z`)
+    )
+  );
   chartValues.push(Number(dailyPortfolioValue.toFixed(2)));
 }
 
@@ -989,29 +1143,117 @@ if (chartLabels.length === 0) {
     .sort((a, b) => a.change - b.change)
     .slice(0, 5);
 
-  // ==================================================
+      /*
+        =========================================
+        PROFIT-BASED LEADERBOARD
+        -----------------------------------------
+        Purpose:
+        - Shows best and worst investments based on
+          purchase cost vs current market value
+        - Different from price movers:
+          price movers track market change
+          profit leaderboard tracks your own gain/loss
+        =========================================
+        */
+        const profitItems = items
+          .map((row) => {
+            const market = getRowMarketTotal(row);
+            const cost = getRowPurchaseTotal(row);
+
+            /*
+            Skip rows with no cost basis.
+            If cost is 0, we cannot measure real investment performance.
+            */
+            if (cost === 0) return null;
+
+            return {
+              id: row.id,
+              name: row.item.name,
+              profit: market - cost,
+            };
+          })
+          .filter(
+            (x): x is { id: string; name: string; profit: number } => Boolean(x)
+          );
+
+        /*
+        Best investments first
+        */
+        const topProfitItems = [...profitItems]
+          .sort((a, b) => b.profit - a.profit)
+          .slice(0, 3);
+
+        /*
+        Worst investments first
+        */
+        const worstProfitItems = [...profitItems]
+          .sort((a, b) => a.profit - b.profit)
+          .slice(0, 3);
+
+    // ==================================================
   // SET COMPLETION
   // ==================================================
 
-  // Figure out if this collection is focused on exactly one set/game
-  const uniqueSetsInCollection = Array.from(
-    new Set(items.map((item) => item.item.set).filter(Boolean))
-  );
+  /*
+  Smart set tracking
 
-  const uniqueGamesInCollection = Array.from(
-    new Set(items.map((item) => item.item.game).filter(Boolean))
-  );
+  Old behavior:
+  - only allow set completion if the collection has exactly 1 set and 1 game
 
+  New behavior:
+  - if not on Main collection, automatically track the most common set
+  - automatically track the most common game
+  - this makes set completion more forgiving and useful
+  */
+  let trackedSetName: string | null = null;
+  let trackedGameName: string | null = null;
+
+  if (!isMainCollection) {
+    /*
+    Count how many times each set appears
+    */
+    const setCounts = new Map<string, number>();
+
+    /*
+    Count how many times each game appears
+    */
+    const gameCounts = new Map<string, number>();
+
+    for (const row of items) {
+      if (row.item.set) {
+        setCounts.set(row.item.set, (setCounts.get(row.item.set) ?? 0) + 1);
+      }
+
+      if (row.item.game) {
+        gameCounts.set(row.item.game, (gameCounts.get(row.item.game) ?? 0) + 1);
+      }
+    }
+
+    /*
+    Pick the most common set in this collection
+    */
+    trackedSetName =
+      [...setCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+    /*
+    Pick the most common game in this collection
+    */
+    trackedGameName =
+      [...gameCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  }
+
+  /*
+  Can show completion as long as:
+  - not main collection
+  - we found a set
+  - we found a game
+  */
   const canShowSetCompletion =
-    !isMainCollection &&
-    uniqueSetsInCollection.length === 1 &&
-    uniqueGamesInCollection.length === 1;
+    !isMainCollection && !!trackedSetName && !!trackedGameName;
 
-  const trackedSetName = canShowSetCompletion ? uniqueSetsInCollection[0] : null;
-  const trackedGameName = canShowSetCompletion
-    ? uniqueGamesInCollection[0]
-    : null;
-
+  /*
+  Count unique owned items in the tracked set
+  */
   const ownedUniqueSetItems = canShowSetCompletion
     ? new Set(
         items
@@ -1024,6 +1266,9 @@ if (chartLabels.length === 0) {
       ).size
     : 0;
 
+  /*
+  Build a clean list of owned tracked item ids
+  */
   const ownedTrackedItemIds =
     canShowSetCompletion && trackedSetName && trackedGameName
       ? Array.from(
@@ -1039,6 +1284,9 @@ if (chartLabels.length === 0) {
         )
       : [];
 
+  /*
+  Total number of items in the tracked set
+  */
   const totalItemsInTrackedSet =
     canShowSetCompletion && trackedSetName && trackedGameName
       ? await prisma.item.count({
@@ -1049,35 +1297,121 @@ if (chartLabels.length === 0) {
         })
       : 0;
 
+  /*
+  Completion percent
+  */
   const setCompletionPercent =
     totalItemsInTrackedSet > 0
       ? Math.round((ownedUniqueSetItems / totalItemsInTrackedSet) * 100)
       : 0;
 
-  const missingItems =
-    canShowSetCompletion && trackedSetName && trackedGameName
-      ? await prisma.item.findMany({
-          where: {
-            set: trackedSetName,
-            game: trackedGameName,
-            id: {
-              notIn:
-                ownedTrackedItemIds.length > 0
-                  ? ownedTrackedItemIds
-                  : ["__none__"],
-            },
-          },
-          select: {
-            id: true,
-            name: true,
-          },
-          orderBy: {
-            name: "asc",
-          },
-          take: 5,
-        })
-      : [];
+  /*
+  Load ALL missing items with:
+  - rarity
+  - item number
+  - latest price row
 
+  Why:
+  - we want to show the full missing list
+  - we want to sort by importance
+  - we want to calculate missing value
+  */
+  const missingItems =
+  canShowSetCompletion && trackedSetName && trackedGameName
+    ? await prisma.item.findMany({
+        where: {
+          set: trackedSetName,
+          game: trackedGameName,
+          id: {
+            notIn:
+              ownedTrackedItemIds.length > 0
+                ? ownedTrackedItemIds
+                : ["__none__"],
+          },
+        },
+
+        /*
+        Pull all data needed for missing-item priority display
+        */
+        select: {
+          id: true,
+          name: true,
+          rarity: true,
+          itemNumber: true,
+          prices: {
+            orderBy: { lastUpdated: "desc" },
+            take: 10,
+          },
+        },
+      })
+    : [];
+
+/*
+Convert DB result into clean UI format.
+Price = newest trusted provider price (same rules as owned cards).
+Missing items without one get price: null (unknown), never a rarity-based guess.
+*/
+const formattedMissingItems = missingItems.map((item) => ({
+  id: item.id,
+  name: item.name,
+  rarity: item.rarity,
+  itemNumber: item.itemNumber,
+  price: filterTrustedHistory(item.prices ?? [])[0]?.marketPrice ?? null,
+}));
+
+/*
+Helper for rarity sorting
+Higher score = higher priority
+*/
+function getRaritySortScore(rarity?: string | null) {
+  const value = rarity?.toLowerCase() ?? "";
+
+  if (value.includes("holo")) return 4;
+  if (value.includes("rare")) return 3;
+  if (value.includes("uncommon")) return 2;
+  return 1;
+}
+
+/*
+Convert card/item number into a sortable number.
+If it is not numeric, push it lower in number sorting.
+*/
+function getItemNumberSortValue(itemNumber?: string | null) {
+  const parsed = Number(itemNumber);
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+/*
+Sort missing items based on dashboard query param
+*/
+const sortedMissingItems = [...formattedMissingItems].sort((a, b) => {
+  switch (missingSort) {
+    case "price_asc":
+      return (a.price ?? 0) - (b.price ?? 0);
+
+    case "number_asc":
+      return getItemNumberSortValue(a.itemNumber) - getItemNumberSortValue(b.itemNumber);
+
+    case "name_asc":
+      return a.name.localeCompare(b.name);
+
+    case "rarity_desc":
+      return getRaritySortScore(b.rarity) - getRaritySortScore(a.rarity);
+
+    case "price_desc":
+    default:
+      return (b.price ?? 0) - (a.price ?? 0);
+  }
+});
+
+/*
+Total value of all missing items in the tracked set
+*/
+const missingValue = sortedMissingItems.reduce(
+  (total, item) => total + (item.price ?? 0),
+  0
+);
+  
   // ==================================================
   // LAST REFRESH LABEL
   // ==================================================
@@ -1123,7 +1457,7 @@ if (chartLabels.length === 0) {
            ========================================= */}
         <CollectionControls
           collections={collections}
-          activeCollectionId={activeCollectionId}
+          activeCollectionId={String(activeCollectionId)}
           isMainCollection={isMainCollection}
           currentView={currentView}
           switchCollection={switchCollection}
@@ -1153,6 +1487,8 @@ if (chartLabels.length === 0) {
           topGainers={topGainers}
           topLosers={topLosers}
           topValuableItems={topValuableItems}
+          topProfitItems={topProfitItems}
+          worstProfitItems={worstProfitItems}
         />
         <div className="mt-6">
           <CollectionValueBreakdown collections={collectionTotals} />
@@ -1169,9 +1505,11 @@ if (chartLabels.length === 0) {
           ownedUniqueSetItems={ownedUniqueSetItems}
           totalItemsInTrackedSet={totalItemsInTrackedSet}
           setCompletionPercent={setCompletionPercent}
-          missingItems={missingItems}
+          missingItems={sortedMissingItems}
+          missingValue={missingValue}
+          missingSort={missingSort}
+          activeCollectionId={activeCollectionId}
         />
-
         {/* =========================================
             FILTERS / SORT / SEARCH / COLLECTION ITEMS
            ========================================= */}
@@ -1299,30 +1637,23 @@ if (chartLabels.length === 0) {
               Rendered in a client component so cards
               can open the detail modal
              ========================================= */}
-          <div className="mt-5">
-            <CollectionItemsSection
-              sorted={sorted}
+          <DashboardCollectionArea
+              sorted={sorted as any}
               currentView={currentView}
+              isMainCollection={isMainCollection}
+              activeCollectionId={activeCollectionId}
+              collections={collections}
+              addItem={addItem}
+              onAdd={addItemToCollection}
+              defaultCatalogQuery={catalog}
               savePurchasePrice={savePurchasePrice}
               saveMarketPrice={saveMarketPrice}
               updateQuantity={updateQuantity}
               deleteItem={deleteItem}
               updateItemDetails={updateItemDetails}
+              useAutoPriceAgain={useAutoPriceAgain}
             />
-          </div>
         </div>
-
-        {/* =========================================
-            COLLECTION TOOLS
-            Placed at bottom on purpose
-           ========================================= */}
-        <CollectionTools
-          isMainCollection={isMainCollection}
-          activeCollectionId={activeCollectionId}
-          collections={collections}
-          addItem={addItem}
-          defaultCatalogQuery={catalog}
-        />
       </div>
     </div>
   );

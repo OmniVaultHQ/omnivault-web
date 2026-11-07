@@ -16,8 +16,14 @@ type TopValuableItem = {
   id: string;
   name: string;
   quantity: number;
-  displayPrice: number;
+  displayPrice: number | null;
   totalValue: number;
+};
+
+type ProfitItem = {
+  id: string;
+  name: string;
+  profit: number;
 };
 
 type Props = {
@@ -28,6 +34,8 @@ type Props = {
   topGainers: PriceMover[];
   topLosers: PriceMover[];
   topValuableItems: TopValuableItem[];
+  topProfitItems: ProfitItem[];
+  worstProfitItems: ProfitItem[];
 };
 
 export default function PortfolioAnalytics({
@@ -38,6 +46,8 @@ export default function PortfolioAnalytics({
   topGainers,
   topLosers,
   topValuableItems,
+  topProfitItems,
+  worstProfitItems,
 }: Props) {
   return (
     <>
@@ -71,7 +81,8 @@ export default function PortfolioAnalytics({
         ) : (
           <div className="mt-5 space-y-3">
             {allocationDisplay.map((g) => {
-              const pct = allocationTotal > 0 ? (g.value / allocationTotal) * 100 : 0;
+              const pct =
+                allocationTotal > 0 ? (g.value / allocationTotal) * 100 : 0;
 
               return (
                 <div
@@ -80,13 +91,17 @@ export default function PortfolioAnalytics({
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{g.label}</div>
+                      <div className="truncate text-sm font-medium">
+                        {g.label}
+                      </div>
                       <div className="text-xs text-white/55">
                         ${g.value.toFixed(2)} • {pct.toFixed(1)}%
                       </div>
                     </div>
 
-                    <div className="text-sm font-semibold">${g.value.toFixed(2)}</div>
+                    <div className="text-sm font-semibold">
+                      ${g.value.toFixed(2)}
+                    </div>
                   </div>
 
                   <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-white/10">
@@ -106,12 +121,15 @@ export default function PortfolioAnalytics({
           PRICE MOVERS
          ========================================= */}
       <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Top Gainers */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
           <div className="text-base font-semibold">Top Gainers</div>
 
           <div className="mt-4 space-y-2">
             {topGainers.length === 0 ? (
-              <div className="text-sm text-white/50">No gainers yet.</div>
+              <div className="text-sm text-white/50">
+                No gainers yet — no positive price changes saved yet.
+              </div>
             ) : (
               topGainers.map((c, i) => (
                 <div
@@ -122,23 +140,24 @@ export default function PortfolioAnalytics({
                     #{i + 1} {c.name}
                   </div>
 
-                  <div className="font-medium text-red-400">
-                    -${Math.abs(c.change).toFixed(2)}
-                    {c.pct == null ? "" : ` (-${Math.abs(c.pct).toFixed(1)}%)`}
-                    </div>
+                  <div className="font-medium text-green-400">
+                    +${Math.abs(c.change).toFixed(2)}
+                    {c.pct == null ? "" : ` (+${Math.abs(c.pct).toFixed(1)}%)`}
+                  </div>
                 </div>
               ))
             )}
           </div>
         </div>
 
+        {/* Top Losers */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
           <div className="text-base font-semibold">Top Losers</div>
 
           <div className="mt-4 space-y-2">
             {topLosers.length === 0 ? (
               <div className="text-sm text-white/50">
-                No losers yet — everything is up 📈
+                No losers yet — everything is holding or rising.
               </div>
             ) : (
               topLosers.map((c, i) => (
@@ -151,13 +170,60 @@ export default function PortfolioAnalytics({
                   </div>
 
                   <div className="font-medium text-red-400">
-                    ${c.change.toFixed(2)}
-                    {c.pct == null ? "" : ` (${c.pct.toFixed(1)}%)`}
+                    -${Math.abs(c.change).toFixed(2)}
+                    {c.pct == null ? "" : ` (-${Math.abs(c.pct).toFixed(1)}%)`}
                   </div>
                 </div>
               ))
             )}
           </div>
+        </div>
+      </div>
+
+      {/* =========================================
+          PROFIT LEADERBOARD
+         ========================================= */}
+      <div className="mt-6 grid gap-4 md:grid-cols-2">
+        {/* Top Profit */}
+        <div className="rounded-2xl border border-green-400/20 bg-green-400/5 p-4">
+          <div className="mb-2 text-sm font-semibold">Top Profit</div>
+
+          {topProfitItems.length === 0 ? (
+            <div className="text-sm text-white/50">
+              Add purchase prices to track profit
+            </div>
+          ) : (
+            topProfitItems.map((item, i) => (
+              <div key={item.id} className="flex justify-between text-sm">
+                <span>
+                  #{i + 1} {item.name}
+                </span>
+                <span className="font-medium text-green-400">
+                  +${item.profit.toFixed(2)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Worst Investment */}
+        <div className="rounded-2xl border border-red-400/20 bg-red-400/5 p-4">
+          <div className="mb-2 text-sm font-semibold">Worst Investment</div>
+
+          {worstProfitItems.length === 0 ? (
+            <div className="text-sm text-white/50">No losses yet 👍</div>
+          ) : (
+            worstProfitItems.map((item, i) => (
+              <div key={item.id} className="flex justify-between text-sm">
+                <span>
+                  #{i + 1} {item.name}
+                </span>
+                <span className="font-medium text-red-400">
+                  ${item.profit.toFixed(2)}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
@@ -184,7 +250,10 @@ export default function PortfolioAnalytics({
                     #{index + 1} {item.name}
                   </div>
                   <div className="text-xs text-white/55">
-                    Qty: {item.quantity} • ${item.displayPrice.toFixed(2)} each
+                    Qty: {item.quantity} •{" "}
+                    {item.displayPrice != null
+                      ? `$${item.displayPrice.toFixed(2)} each`
+                      : "No price yet"}
                   </div>
                 </div>
 

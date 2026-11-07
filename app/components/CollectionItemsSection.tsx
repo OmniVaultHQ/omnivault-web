@@ -14,7 +14,7 @@ Why this exists:
 - modals need client-side state
 */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SubmitButton from "@/app/components/Submitbutton";
 import PriceHistory from "@/app/components/PriceHistory";
 import ItemDetailModal from "@/app/components/ItemDetailModal";
@@ -28,10 +28,33 @@ type PriceEntry = {
   createdAt: Date | string;
   source: string;
   lastUpdated?: Date | string;
+  currency?: string;
+  confidence?: string | null;
+  sampleSize?: number | null;
+  providerUpdatedAt?: Date | string | null;
 };
+
+// A provider price whose underlying market data is older than this is "stale"
+const STALE_AFTER_DAYS = 7;
+
+/*
+Format a market-data date as "Oct 15, 2026" in UTC.
+Provider dates are date-only (stored as midnight UTC); formatting in local time
+would show the previous day in US time zones, and server vs browser time zones
+would disagree during hydration.
+*/
+function formatDataDate(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
 
 /*
 One owned collection row plus linked item data
+
 IMPORTANT:
 - condition belongs to the owned row, not the shared item
 */
@@ -41,16 +64,39 @@ type CollectionRow = {
   purchasePrice: number | null;
   marketPrice: number | null;
 
-  // Condition saved on the owned collection row
-  // Example: Near Mint, Painted, Sealed
+  /*
+  If true, this row is manually controlled and auto refresh
+  should not overwrite it.
+  */
+  manualPriceLocked?: boolean | null;
+
+  /*
+  Where the current owned-row market price came from
+  Examples:
+  - manual
+  - simulated
+  - tcgplayer
+  */
+  priceSource?: string | null;
+
+  /*
+  When the owned-row market price was last updated
+  */
+  lastPriceUpdated?: Date | string | null;
+
+  /*
+  Condition saved on the owned collection row
+  Example: Near Mint, Painted, Sealed
+  */
   condition: string | null;
   notes: string | null;
 
-   item: {
+  item: {
     id: string;
     name: string;
     game: string;
     set: string;
+    rarity?: string | null;
     category?: string | null;
     imageUrl?: string | null;
     isCustom?: boolean;
@@ -67,6 +113,7 @@ type Props = {
   updateQuantity: (formData: FormData) => Promise<void>;
   deleteItem: (formData: FormData) => Promise<void>;
   updateItemDetails: (formData: FormData) => Promise<void>;
+  useAutoPriceAgain: (formData: FormData) => Promise<void>;
 };
 
 export default function CollectionItemsSection({
@@ -77,12 +124,38 @@ export default function CollectionItemsSection({
   updateQuantity,
   deleteItem,
   updateItemDetails,
+  useAutoPriceAgain,
 }: Props) {
+  // "Now" captured once per mount so render stays pure (used for stale-price checks)
+  const [nowMs] = useState(() => Date.now());
+
+  /*
+  LOCAL STATE COPY OF ITEMS
+
+  Why:
+  - allows this client component to keep a live copy of the rows
+  - when the server sends updated rows later, we sync back to them
+  - this is the first step toward smoother UI behavior
+  */
+  const [localItems, setLocalItems] = useState(sorted);
+
   /*
   selectedItemId
   - Stores which collection row is currently open in the modal
   */
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+
+  /*
+  Keep localItems synced with fresh server data.
+
+  Why:
+  - when filters/sorts/search/collection changes happen,
+    the server gives us a new sorted array
+  - this effect makes sure local client state updates too
+  */
+  useEffect(() => {
+    setLocalItems(sorted);
+  }, [sorted]);
 
   /*
   Format a date nicely for the UI
@@ -114,6 +187,27 @@ export default function CollectionItemsSection({
   }
 
   /*
+  True if this row is manually locked
+  */
+  function isManualPriceLocked(row: CollectionRow) {
+    return Boolean(row.manualPriceLocked);
+  }
+
+  /*
+  Where the current owned-row market price came from
+  */
+  function getRowPriceSource(row: CollectionRow) {
+    return row.priceSource ?? null;
+  }
+
+  /*
+  Latest owned-row market price timestamp
+  */
+  function getRowPriceUpdatedAt(row: CollectionRow) {
+    return row.lastPriceUpdated ?? null;
+  }
+
+  /*
   Latest shared/catalog market price
   */
   function getCatalogMarketPrice(row: CollectionRow) {
@@ -132,25 +226,138 @@ export default function CollectionItemsSection({
   }
 
   /*
+  Active displayed market price source.
+
+  Priority:
+  1. Manual locked price
+  2. Row-level synced price source
+  3. Catalog/shared history source
+  4. Purchase fallback
+  5. None (no price yet; never a rarity guess)
+  */
+  function getActivePriceSource(row: CollectionRow) {
+    if (isManualPriceLocked(row) && getManualMarketPrice(row) !== null) {
+      return "manual";
+    }
+
+    if (getManualMarketPrice(row) !== null && getRowPriceSource(row)) {
+      return getRowPriceSource(row);
+    }
+
+    if (row.item.prices?.[0]?.source) {
+      return row.item.prices[0].source;
+    }
+
+    if (getPurchasePrice(row) !== null) {
+      return "purchase fallback";
+    }
+
+    return "none";
+  }
+
+  /*
+  Quality of the provider price being shown (confidence + data age).
+
+  Only applies when the displayed price came from a provider and matches the
+  newest trusted history row. Manual, purchase-fallback and no-price rows
+  return null (nothing to grade).
+
+  Data age uses the provider's own date when known (TCGplayer data via
+  pokemontcg.io can lag weeks behind), otherwise when we last confirmed it.
+  */
+  function getPriceQuality(row: CollectionRow) {
+    const source = getActivePriceSource(row);
+    const latest = row.item.prices?.[0];
+    if (!latest || latest.source !== source) return null;
+
+    const dataDateRaw = latest.providerUpdatedAt ?? latest.lastUpdated ?? latest.createdAt;
+    const dataDate = dataDateRaw ? new Date(dataDateRaw) : null;
+    const ageDays =
+      dataDate && !Number.isNaN(dataDate.getTime())
+        ? (nowMs - dataDate.getTime()) / (24 * 60 * 60 * 1000)
+        : null;
+
+    return {
+      confidence: latest.confidence ?? null,
+      sampleSize: latest.sampleSize ?? null,
+      dataDate,
+      isStale: ageDays !== null && ageDays > STALE_AFTER_DAYS,
+    };
+  }
+
+  // One-line summary for the detail modal, e.g. "Low confidence · 6 listings · data from Oct 15, 2026"
+  function getPriceQualityLabel(row: CollectionRow): string | null {
+    const quality = getPriceQuality(row);
+    if (!quality) return null;
+
+    const parts: string[] = [];
+    if (quality.confidence) parts.push(`${quality.confidence[0].toUpperCase()}${quality.confidence.slice(1)} confidence`);
+    if (quality.sampleSize) parts.push(`${quality.sampleSize} listings`);
+    if (quality.dataDate) {
+      parts.push(
+        `data from ${formatDataDate(quality.dataDate)}${quality.isStale ? " (stale)" : ""}`
+      );
+    }
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
+
+  function renderPriceQualityBadges(row: CollectionRow) {
+    const quality = getPriceQuality(row);
+    if (!quality) return null;
+
+    const dataDateLabel = quality.dataDate
+      ? formatDataDate(quality.dataDate)
+      : null;
+
+    return (
+      <div className="flex flex-wrap justify-end gap-1">
+        {quality.confidence === "low" && (
+          <span
+            className="inline-flex rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300"
+            title={`Rough estimate${quality.sampleSize ? ` from ${quality.sampleSize} listings` : ""}: active asking prices, not sales`}
+          >
+            Low confidence
+          </span>
+        )}
+        {quality.isStale && (
+          <span
+            className="inline-flex rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] text-white/60"
+            title={`Latest market data is from ${dataDateLabel}`}
+          >
+            Data from {dataDateLabel}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  /*
+  Active displayed market price updated time.
+
+  Priority:
+  1. Row-level updated time
+  2. Catalog/shared updated time
+  */
+  function getActivePriceUpdatedAt(row: CollectionRow) {
+    return getRowPriceUpdatedAt(row) ?? getCatalogPriceUpdatedAt(row);
+  }
+
+  /*
   Effective market price priority:
   1. manual market price on collection row
   2. latest catalog/shared price
   3. purchase price fallback
-  4. zero
+  Otherwise null (no price yet)
   */
-  function getEffectiveMarketPrice(row: CollectionRow) {
-    const manual = getManualMarketPrice(row);
-    const catalog = getCatalogMarketPrice(row);
-    const purchase = getPurchasePrice(row);
-
-    return manual ?? catalog ?? purchase ?? 0;
+  function getEffectiveMarketPrice(row: CollectionRow): number | null {
+    return getManualMarketPrice(row) ?? getCatalogMarketPrice(row) ?? getPurchasePrice(row);
   }
 
   /*
   Total market value for this row
   */
   function getRowMarketTotal(row: CollectionRow) {
-    return getEffectiveMarketPrice(row) * row.quantity;
+    return (getEffectiveMarketPrice(row) ?? 0) * row.quantity;
   }
 
   /*
@@ -184,12 +391,90 @@ export default function CollectionItemsSection({
   }
 
   /*
+  Friendly label for price source
+  */
+  function getPriceSourceLabel(row: CollectionRow) {
+    const source = getActivePriceSource(row);
+
+    switch (source) {
+      case "manual":
+        return isManualPriceLocked(row) ? "Manual (Locked)" : "Manual";
+      case "simulated":
+        return "Simulated";
+      case "tcgplayer":
+        return "TCGPlayer";
+      case "ebay":
+        return "eBay";
+      case "pricecharting":
+        return "PriceCharting";
+      case "purchase fallback":
+        return "Purchase Fallback";
+      case "rarity fallback":
+        return "Rarity Fallback";
+      case "none":
+        return "No price yet";
+      default:
+        return source;
+    }
+  }
+
+  /*
+  Visual style for price source badges.
+  */
+  function getPriceSourceBadgeClass(row: CollectionRow) {
+    const source = getActivePriceSource(row);
+
+    switch (source) {
+      case "manual":
+        return "border-amber-400/30 bg-amber-500/10 text-amber-300";
+      case "simulated":
+        return "border-blue-400/30 bg-blue-500/10 text-blue-300";
+      case "tcgplayer":
+        return "border-purple-400/30 bg-purple-500/10 text-purple-300";
+      case "ebay":
+        return "border-cyan-400/30 bg-cyan-500/10 text-cyan-300";
+      case "pricecharting":
+        return "border-fuchsia-400/30 bg-fuchsia-500/10 text-fuchsia-300";
+      case "purchase fallback":
+        return "border-orange-400/30 bg-orange-500/10 text-orange-300";
+      case "rarity fallback":
+        return "border-yellow-400/30 bg-yellow-500/10 text-yellow-300";
+      default:
+        return "border-white/10 bg-white/5 text-white/60";
+    }
+  }
+
+  /*
+  Color helper for row profit/loss text.
+  */
+  function getProfitLossTextClass(value: number | null) {
+    if (value == null) return "text-white/35";
+    if (value > 0) return "text-green-400";
+    if (value < 0) return "text-red-400";
+    return "text-white/55";
+  }
+
+  /*
+  Format profit/loss for display.
+  */
+  function formatProfitLoss(value: number | null) {
+    if (value == null) return "—";
+    return `${value >= 0 ? "+" : ""}$${value.toFixed(2)}`;
+  }
+
+  /*
   Build the selected modal item from the clicked collection row
+
+  IMPORTANT:
+  Use localItems here, not sorted.
+
+  Why:
+  - the modal should always reflect the same data the screen is rendering
   */
   const modalItem = useMemo(() => {
     if (!selectedItemId) return null;
 
-    const row = sorted.find((x) => x.id === selectedItemId);
+    const row = localItems.find((x) => x.id === selectedItemId);
     if (!row) return null;
 
     const purchasePrice = getPurchasePrice(row);
@@ -199,39 +484,38 @@ export default function CollectionItemsSection({
     const totalValue = getRowMarketTotal(row);
     const totalCost = getRowPurchaseTotal(row);
     const profitLoss = getRowProfitLoss(row);
-    const updatedAtLabel = formatPriceUpdatedAt(getCatalogPriceUpdatedAt(row));
+    const updatedAtLabel = formatPriceUpdatedAt(getActivePriceUpdatedAt(row));
 
     return {
-  id: row.id,
-  name: row.item.name,
-  game: row.item.game,
-  set: row.item.set,
-  category: row.item.category ?? null,
-  imageUrl: row.item.imageUrl ?? null,
-  isCustom: row.item.isCustom ?? false,
-
-  condition: row.condition ?? null,
-
-  // NEW: notes field for modal editing
-  notes: (row as any).notes ?? null,
-
-  quantity: row.quantity,
-  purchasePrice,
-  manualMarketPrice,
-  catalogMarketPrice,
-  effectiveMarketPrice,
-  totalValue,
-  totalCost,
-  profitLoss,
-  updatedAtLabel,
-  history: row.item.prices.map((price) => ({
-    id: price.id,
-    marketPrice: price.marketPrice,
-    createdAt: price.createdAt,
-    source: price.source,
-  })),
-};
-  }, [selectedItemId, sorted]);
+      id: row.id,
+      name: row.item.name,
+      game: row.item.game,
+      set: row.item.set,
+      category: row.item.category ?? null,
+      imageUrl: row.item.imageUrl ?? null,
+      isCustom: row.item.isCustom ?? false,
+      condition: row.condition ?? null,
+      notes: row.notes ?? null,
+      quantity: row.quantity,
+      purchasePrice,
+      manualMarketPrice,
+      catalogMarketPrice,
+      effectiveMarketPrice,
+      totalValue,
+      totalCost,
+      profitLoss,
+      updatedAtLabel,
+      manualPriceLocked: isManualPriceLocked(row),
+      activePriceSource: getPriceSourceLabel(row),
+      priceQualityLabel: getPriceQualityLabel(row),
+      history: row.item.prices.map((price) => ({
+        id: price.id,
+        marketPrice: price.marketPrice,
+        createdAt: price.createdAt,
+        source: price.source,
+      })),
+    };
+  }, [selectedItemId, localItems]);
 
   /*
   Open the detail modal for one row
@@ -262,22 +546,24 @@ export default function CollectionItemsSection({
 
   return (
     <>
-      {sorted.length === 0 ? (
+      {localItems.length === 0 ? (
         <div className="rounded-2xl border border-white/10 bg-white/[0.05] p-6 text-sm text-white/60">
           No items match your filters.
         </div>
       ) : currentView === "list" ? (
         <div className="space-y-4">
-          {sorted.map((i) => {
+          {localItems.map((i) => {
             const item = i.item;
             const effectiveMarketPrice = getEffectiveMarketPrice(i);
-            const latestPriceUpdatedAt = formatPriceUpdatedAt(
-              getCatalogPriceUpdatedAt(i)
+            const activeUpdatedAt = formatPriceUpdatedAt(
+              getActivePriceUpdatedAt(i)
             );
             const marketTotal = getRowMarketTotal(i);
             const purchaseTotal = getRowPurchaseTotal(i);
             const rowProfitLoss = getRowProfitLoss(i);
             const priceChange = getPriceChange(i);
+            const sourceLabel = getPriceSourceLabel(i);
+            const locked = isManualPriceLocked(i);
 
             return (
               <div
@@ -325,6 +611,12 @@ export default function CollectionItemsSection({
                           Custom
                         </span>
                       )}
+
+                      {locked ? (
+                        <span className="ml-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                          Manual Locked
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -344,31 +636,45 @@ export default function CollectionItemsSection({
                 {/* RIGHT: values + inline editors */}
                 <div className="flex w-full flex-col gap-3">
                   <div className="flex justify-end">
-                    <div className="min-w-[180px] rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-right text-xs leading-tight">
-                      <div className="text-white/55">
-                        Cost: ${purchaseTotal.toFixed(2)}
+                    <div className="min-w-[210px] rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-right text-xs leading-tight">
+                      <div className="text-white/45">Cost Basis</div>
+                      <div className="font-medium text-white/80">
+                        ${purchaseTotal.toFixed(2)}
                       </div>
 
-                      <div className="font-medium text-white/85">
-                        Value: ${marketTotal.toFixed(2)}
+                      <div className="mt-2 text-white/45">Market Value</div>
+                      <div className="font-semibold text-white">
+                        ${marketTotal.toFixed(2)}
                       </div>
 
-                      <div
-                        className={
-                          rowProfitLoss == null
-                            ? "text-white/35"
-                            : rowProfitLoss > 0
-                              ? "text-green-400"
-                              : rowProfitLoss < 0
-                                ? "text-red-400"
-                                : "text-white/55"
-                        }
-                      >
-                        Profit/Loss:{" "}
-                        {rowProfitLoss == null
-                          ? "—"
-                          : `${rowProfitLoss >= 0 ? "+" : ""}$${rowProfitLoss.toFixed(2)}`}
-                      </div>
+                      <div className="mt-2 text-white/45">Profit / Loss</div>
+                      {/*
+                        =========================================
+                        PROFIT / LOSS DISPLAY (ENHANCED)
+                        -----------------------------------------
+                        Purpose:
+                        - Make gains/losses visually obvious
+                        - Add background + color feedback
+                        - Feels like investing dashboard
+                        =========================================
+                        */}
+                        <div
+                          className={`mt-1 rounded-md px-2 py-1 text-xs font-semibold inline-block
+                            ${
+                              rowProfitLoss == null
+                                ? "bg-white/5 text-white/40"
+                                : rowProfitLoss > 0
+                                ? "bg-green-500/15 text-green-400 border border-green-400/20"
+                                : rowProfitLoss < 0
+                                ? "bg-red-500/15 text-red-400 border border-red-400/20"
+                                : "bg-white/10 text-white/60"
+                            }
+                          `}
+                        >
+                          {rowProfitLoss == null
+                            ? "No cost basis"
+                            : `${rowProfitLoss >= 0 ? "+" : ""}$${rowProfitLoss.toFixed(2)}`}
+                        </div>
                     </div>
                   </div>
 
@@ -441,28 +747,28 @@ export default function CollectionItemsSection({
                     </form>
                   </div>
 
-                  <div className="ml-auto text-right text-[11px] text-white/40">
-                    <div>
-                      Market used: ${effectiveMarketPrice.toFixed(2)} each
+                  <div className="ml-auto flex flex-col items-end gap-1 text-right text-[11px]">
+                    <div className="text-white/40">
+                      {effectiveMarketPrice != null ? `Market used: $${effectiveMarketPrice.toFixed(2)} each` : "No market price yet"}
                     </div>
 
+                    <div
+                      className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] ${getPriceSourceBadgeClass(i)}`}
+                    >
+                      {sourceLabel}
+                    </div>
+
+                    {renderPriceQualityBadges(i)}
+
                     {priceChange !== null && (
-                      <div
-                        className={
-                          priceChange > 0
-                            ? "text-green-400"
-                            : priceChange < 0
-                              ? "text-red-400"
-                              : "text-white/40"
-                        }
-                      >
+                      <div className={getProfitLossTextClass(priceChange)}>
                         Change: {priceChange >= 0 ? "+" : ""}
                         ${priceChange.toFixed(2)}
                       </div>
                     )}
 
-                    <div>
-                      Updated: {latestPriceUpdatedAt ?? "No market update yet"}
+                    <div className="text-white/35">
+                      Updated: {activeUpdatedAt ?? "No market update yet"}
                     </div>
                   </div>
                 </div>
@@ -472,15 +778,17 @@ export default function CollectionItemsSection({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-          {sorted.map((i) => {
+          {localItems.map((i) => {
             const item = i.item;
             const effectiveMarketPrice = getEffectiveMarketPrice(i);
-            const latestPriceUpdatedAt = formatPriceUpdatedAt(
-              getCatalogPriceUpdatedAt(i)
+            const activeUpdatedAt = formatPriceUpdatedAt(
+              getActivePriceUpdatedAt(i)
             );
             const marketTotal = getRowMarketTotal(i);
             const purchaseTotal = getRowPurchaseTotal(i);
             const rowProfitLoss = getRowProfitLoss(i);
+            const sourceLabel = getPriceSourceLabel(i);
+            const locked = isManualPriceLocked(i);
 
             return (
               <div
@@ -538,6 +846,12 @@ export default function CollectionItemsSection({
                           Custom
                         </div>
                       ) : null}
+
+                      {locked ? (
+                        <div className="inline-flex rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                          Manual Locked
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
@@ -551,7 +865,7 @@ export default function CollectionItemsSection({
                       <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                         <div className="text-white/45">Market Price</div>
                         <div className="mt-1 font-medium">
-                          ${effectiveMarketPrice.toFixed(2)}
+                          {effectiveMarketPrice != null ? `$${effectiveMarketPrice.toFixed(2)}` : "—"}
                         </div>
                       </div>
 
@@ -564,28 +878,26 @@ export default function CollectionItemsSection({
                     </div>
 
                     <div
-                      className={
-                        rowProfitLoss == null
-                          ? "mt-3 text-xs text-white/35"
-                          : rowProfitLoss > 0
-                            ? "mt-3 text-xs text-green-400"
-                            : rowProfitLoss < 0
-                              ? "mt-3 text-xs text-red-400"
-                              : "mt-3 text-xs text-white/55"
-                      }
+                      className={`mt-3 text-xs font-medium ${getProfitLossTextClass(rowProfitLoss)}`}
                     >
-                      Profit/Loss:{" "}
-                      {rowProfitLoss == null
-                        ? "—"
-                        : `${rowProfitLoss >= 0 ? "+" : ""}$${rowProfitLoss.toFixed(2)}`}
+                      Profit/Loss: {formatProfitLoss(rowProfitLoss)}
                     </div>
 
-                    <div className="mt-1 text-[11px] text-white/40">
-                      <div>
-                        Market used: ${effectiveMarketPrice.toFixed(2)} each
+                    <div className="mt-2 space-y-1 text-[11px]">
+                      <div className="text-white/40">
+                        {effectiveMarketPrice != null ? `Market used: $${effectiveMarketPrice.toFixed(2)} each` : "No market price yet"}
                       </div>
-                      <div>
-                        Updated: {latestPriceUpdatedAt ?? "No market update yet"}
+
+                      <div
+                        className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] ${getPriceSourceBadgeClass(i)}`}
+                      >
+                        {sourceLabel}
+                      </div>
+
+                      {renderPriceQualityBadges(i)}
+
+                      <div className="text-white/35">
+                        Updated: {activeUpdatedAt ?? "No market update yet"}
                       </div>
                     </div>
                   </div>
@@ -685,7 +997,8 @@ export default function CollectionItemsSection({
         item={modalItem}
         updateItemDetails={updateItemDetails}
         deleteItem={deleteItem}
-        />
+        useAutoPriceAgain={useAutoPriceAgain}
+      />
     </>
   );
 }

@@ -1,10 +1,13 @@
 "use client";
 
 /*
-PortfolioChart Component
-
-This renders the line chart showing
-the total portfolio value over time.
+============================================================
+PORTFOLIO CHART
+------------------------------------------------------------
+Purpose:
+- Renders the line chart for portfolio value over time
+- Used inside PortfolioAnalytics
+============================================================
 */
 
 import {
@@ -15,68 +18,65 @@ import {
   LineElement,
   Tooltip,
   Legend,
+  Filler,
 } from "chart.js";
-
 import { Line } from "react-chartjs-2";
 
-/* Register chart components with Chart.js */
+/*
+Register chart parts with Chart.js
+*/
 ChartJS.register(
   CategoryScale,
   LinearScale,
   PointElement,
   LineElement,
   Tooltip,
-  Legend
+  Legend,
+  Filler
 );
 
-/* Props passed from the dashboard */
+/*
+Props passed in from PortfolioAnalytics
+*/
 type Props = {
   labels: string[];
   values: number[];
 };
 
 export default function PortfolioChart({ labels, values }: Props) {
-
-  /* Chart dataset */
+  /*
+  Chart dataset
+  */
   const data = {
     labels,
     datasets: [
       {
         label: "Portfolio Value",
         data: values,
-
-        /* Line color */
         borderColor: "#60a5fa",
-
-        /* Fill color under the line */
         backgroundColor: "rgba(96,165,250,0.15)",
-
-        /* Smooth curve */
         tension: 0.4,
-
-        /* Fill under the line */
         fill: true,
       },
     ],
   };
 
-  /* Chart visual options */
+  /*
+  Chart options
+  */
   const options = {
     responsive: true,
-
     plugins: {
       legend: {
         display: false,
       },
     },
-
     scales: {
       x: {
         grid: {
           color: "rgba(255,255,255,0.05)",
         },
       },
-
       y: {
         grid: {
           color: "rgba(255,255,255,0.05)",
@@ -85,6 +85,5 @@ export default function PortfolioChart({ labels, values }: Props) {
     },
   };
 
-  /* Render chart */
   return <Line data={data} options={options} />;
 }

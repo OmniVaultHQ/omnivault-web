@@ -1,15 +1,19 @@
 import { prisma } from "@/lib/prisma";
 
 /*
-Ensures every user always has a default "Main" collection.
+Get or create the default "Main" collection safely
 
-Flow:
-1. Look for an existing collection named "Main"
-2. If it exists → return it
-3. If not → create it
+Why this exists:
+- Every user should always have a default collection
+- We must NOT crash if it already exists
+- We must handle race conditions safely
 */
+
 export async function getOrCreateDefaultCollection(userId: string) {
-  // Try to find an existing default collection
+  /*
+  Step 1:
+  Try to find existing "Main" collection
+  */
   const existing = await prisma.collection.findFirst({
     where: {
       userId,
@@ -21,11 +25,31 @@ export async function getOrCreateDefaultCollection(userId: string) {
     return existing;
   }
 
-  // Create the default collection if it doesn't exist
-  return prisma.collection.create({
-    data: {
-      userId,
-      name: "Main",
-    },
-  });
+  /*
+  Step 2:
+  If not found, create it
+
+  We wrap in try/catch because:
+  - another request might create it at the same time
+  - this prevents crashes from unique constraint errors
+  */
+  try {
+    return await prisma.collection.create({
+      data: {
+        userId,
+        name: "Main",
+      },
+    });
+  } catch (error) {
+    /*
+    Step 3:
+    If creation failed (likely duplicate), fetch again
+    */
+    return await prisma.collection.findFirstOrThrow({
+      where: {
+        userId,
+        name: "Main",
+      },
+    });
+  }
 }

@@ -10,12 +10,10 @@ Purpose:
 - Returns lightweight JSON results for fast rendering
 
 Why this version exists:
-- SQLite search is case-sensitive in your setup
-- so we load catalog items first
-- then do case-insensitive filtering in JavaScript
-
-Extra feature:
-- also returns the latest market price, if one exists
+- avoids Prisma engine crashes from nested relation loading
+- keeps search case-insensitive for SQLite
+- supports partial text search and numeric item number search
+- fetches latest prices in a second safer query
 */
 
 export async function GET(req: Request) {
@@ -46,12 +44,15 @@ export async function GET(req: Request) {
     Normalize digit-only searches like:
     001 -> 1
     */
-    const numericQuery =
-      /^\d+$/.test(query) ? String(Number(query)) : null;
+    const numericQuery = /^\d+$/.test(query) ? String(Number(query)) : null;
 
     /*
     Step 5:
-    Load imported catalog items and latest saved price
+    Load catalog items only
+
+    IMPORTANT:
+    We do NOT include nested prices here.
+    That nested relation query is what has been causing Prisma/SQLite trouble.
     */
     const allCatalogItems = await prisma.item.findMany({
       where: {
@@ -65,29 +66,13 @@ export async function GET(req: Request) {
         imageUrl: true,
         rarity: true,
         itemNumber: true,
-
-        /*
-        Load newest saved market price if available
-        */
-        prices: {
-          take: 1,
-          orderBy: {
-            createdAt: "desc",
-          },
-          select: {
-            marketPrice: true,
-          },
-        },
       },
-      orderBy: {
-        name: "asc",
-      },
-      take: 500,
     });
 
     /*
     Step 6:
     Filter in JavaScript so search is case-insensitive
+    and partial search works for SQLite
     */
     const filtered = allCatalogItems.filter((item) => {
       const name = item.name?.toLowerCase() ?? "";
@@ -106,8 +91,8 @@ export async function GET(req: Request) {
       001 -> 1
       */
       const matchesNumeric =
-        numericQuery != null &&
-        item.itemNumber != null &&
+        numericQuery !== null &&
+        item.itemNumber !== null &&
         !Number.isNaN(Number(item.itemNumber)) &&
         String(Number(item.itemNumber)) === numericQuery;
 
@@ -116,10 +101,83 @@ export async function GET(req: Request) {
 
     /*
     Step 7:
-    Flatten latest price into marketPrice so the frontend
-    gets a simple response shape
+    Sort matches AFTER filtering
+
+    Why:
+    - fixes the old problem where useful results were excluded
+      before filtering
+    - keeps search feeling natural
     */
-    const resultWithPrice = filtered.slice(0, 20).map((item) => ({
+    const sorted = filtered.sort((a, b) => {
+    const aName = a.name.toLowerCase();
+    const bName = b.name.toLowerCase();
+
+    const aExact = aName === queryLower;
+    const bExact = bName === queryLower;
+
+    if (aExact && !bExact) return -1;
+    if (!aExact && bExact) return 1;
+
+    const aStarts = aName.startsWith(queryLower);
+    const bStarts = bName.startsWith(queryLower);
+
+    if (aStarts && !bStarts) return -1;
+    if (!aStarts && bStarts) return 1;
+
+    return aName.localeCompare(bName);
+    });
+
+    /*
+    Step 8:
+    Limit final results
+    */
+    const limited = sorted.slice(0, 20);
+
+    /*
+    Step 9:
+    Load latest saved price rows for only the visible results
+
+    We do this as a second query to keep Prisma stable.
+    */
+    const visibleItemIds = limited.map((item) => item.id);
+
+    const latestPriceRows =
+      visibleItemIds.length > 0
+        ? await prisma.itemPrice.findMany({
+            where: {
+              itemId: {
+                in: visibleItemIds,
+              },
+            },
+            orderBy: [
+              { itemId: "asc" },
+              { createdAt: "desc" },
+            ],
+            select: {
+              itemId: true,
+              marketPrice: true,
+              createdAt: true,
+            },
+          })
+        : [];
+
+    /*
+    Step 10:
+    Keep only the newest price per item
+    */
+    const latestPriceByItemId = new Map<string, number>();
+
+    for (const row of latestPriceRows) {
+      if (!latestPriceByItemId.has(row.itemId)) {
+        latestPriceByItemId.set(row.itemId, row.marketPrice);
+      }
+    }
+
+    /*
+    Step 11:
+    Build final frontend-friendly response
+    */
+    const result = limited.map((item) => ({
       id: item.id,
       name: item.name,
       game: item.game,
@@ -127,14 +185,14 @@ export async function GET(req: Request) {
       imageUrl: item.imageUrl,
       rarity: item.rarity,
       itemNumber: item.itemNumber,
-      marketPrice: item.prices[0]?.marketPrice ?? null,
+      marketPrice: latestPriceByItemId.get(item.id) ?? null,
     }));
 
     /*
-    Step 8:
+    Step 12:
     Return results to frontend
     */
-    return NextResponse.json(resultWithPrice);
+    return NextResponse.json(result);
   } catch (error) {
     console.error("CATALOG SEARCH ERROR:", error);
 

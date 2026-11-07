@@ -53,11 +53,42 @@ type PokemonCardsApiResponse = {
   totalCount: number;
 };
 
+type PokemonSetApiItem = {
+  id: string;
+  name: string;
+  series?: string;
+  printedTotal?: number;
+  total?: number;
+  releaseDate?: string;
+};
+
+type PokemonSetsApiResponse = {
+  data: PokemonSetApiItem[];
+};
 /*
 Base URL for the public Pokémon TCG API
 */
 const POKEMON_API_BASE = "https://api.pokemontcg.io/v2";
 
+/*
+Fetch every Pokémon set.
+
+We'll use this later to populate the Admin dropdown.
+*/
+export async function fetchPokemonSets(): Promise<PokemonSetApiItem[]> {
+  const response = await fetch(`${POKEMON_API_BASE}/sets`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to fetch Pokémon sets.");
+  }
+
+  const json =
+    (await response.json()) as PokemonSetsApiResponse;
+
+  return json.data;
+}
 /*
 Fetch ALL cards for one Pokémon set.
 

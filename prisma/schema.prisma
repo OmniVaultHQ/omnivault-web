@@ -163,8 +163,7 @@ model Item {
   collectionItems CollectionItem[]
 
   @@unique([game, setCode, itemNumber], name: "game_setCode_itemNumber")
-  @@unique([game, setCode, name], name: "game_setCode_name")
-  @@unique([name, set, game], name: "name_set_game")
+  
 
   @@index([catalogCollectionId])
   @@index([game])

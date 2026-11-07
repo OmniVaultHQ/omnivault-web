@@ -1,3 +1,18 @@
+/*
+============================================================
+PORTFOLIO SUMMARY CARDS
+------------------------------------------------------------
+Purpose:
+- Shows top dashboard summary metrics
+- Unique items
+- Total quantity
+- Portfolio value
+- Total cost
+- Total profit/loss
+- Most valuable item
+============================================================
+*/
+
 type MostValuableItem = {
   name: string;
   totalValue: number;
@@ -12,8 +27,16 @@ type Props = {
   mostValuableItem: MostValuableItem;
 };
 
+/*
+Format money for display
+*/
 function formatMoney(value: number) {
-  return `$${value.toFixed(2)}`;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 export default function PortfolioSummaryCards({
@@ -24,12 +47,15 @@ export default function PortfolioSummaryCards({
   totalProfitLoss,
   mostValuableItem,
 }: Props) {
+  /*
+  Color for total profit/loss
+  */
   const profitLossClass =
     totalProfitLoss > 0
       ? "text-green-400"
       : totalProfitLoss < 0
-        ? "text-red-400"
-        : "text-white";
+      ? "text-red-400"
+      : "text-white";
 
   return (
     <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">

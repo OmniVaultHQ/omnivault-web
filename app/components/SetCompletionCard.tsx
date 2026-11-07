@@ -117,6 +117,33 @@ export default function SetCompletionCard({
   );
 
   /*
+  =========================================
+  LIMIT MISSING ITEMS SHOWN (TOP 15)
+  -----------------------------------------
+  Purpose:
+  - Prevent UI overload when sets are large
+  - Focus user on most important missing items
+  - Keeps rendering fast and clean
+  =========================================
+  */
+  const visibleMissingItems = missingItems.slice(0, 15);
+  /*
+    =========================================
+    COMPLETION MILESTONE MESSAGE HELPER
+    -----------------------------------------
+    Purpose:
+    - Gives feedback based on completion progress
+    - Makes UI feel more interactive and rewarding
+    =========================================
+    */
+    function getCompletionMessage(percent: number) {
+      if (percent === 100) return "Set fully completed!";
+      if (percent >= 75) return "Almost complete!";
+      if (percent >= 50) return "Halfway there!";
+      if (percent >= 25) return "Good progress!";
+      return "Just getting started";
+    }
+  /*
   CASE 1:
   User is on the main collection.
   Main collection acts like "all collections", so it is not
@@ -186,6 +213,18 @@ export default function SetCompletionCard({
             <span className="text-sm text-white/60">
               {setCompletionPercent}% complete
             </span>
+            {/*
+              =========================================
+              COMPLETION STATUS MESSAGE
+              -----------------------------------------
+              Purpose:
+              - Gives user quick emotional feedback
+              - Encourages continued collecting
+              =========================================
+              */}
+              <div className="text-xs text-white/50">
+                {getCompletionMessage(setCompletionPercent)}
+              </div>
 
             {setCompletionPercent === 100 ? (
               <span className="rounded-full border border-green-400/30 bg-green-400/10 px-2 py-0.5 text-xs text-green-400">
@@ -241,19 +280,46 @@ export default function SetCompletionCard({
           <div className="mt-2 text-xl font-semibold">{missingCount}</div>
         </div>
 
-        <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-          <div className="text-xs uppercase tracking-wide text-white/45">
-            Missing Value
+        {/*
+          =========================================
+          ESTIMATED SET COST CARD
+          -----------------------------------------
+          Purpose:
+          - Shows the estimated total value of all missing items
+          - This is based on saved prices or fallback rarity pricing
+          - Clearer than calling it "Missing Value"
+          =========================================
+          */}
+          <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+            <div className="text-xs uppercase tracking-wide text-white/45">
+              Est. Set Cost
+            </div>
+
+            <div className="mt-2 text-xl font-semibold text-red-400">
+              ${safeMissingValue.toFixed(2)}
+            </div>
+
+            <div className="mt-1 text-xs text-white/40">
+              Estimated total value of missing items
+            </div>
           </div>
-          <div className="mt-2 text-xl font-semibold text-red-400">
-            ${safeMissingValue.toFixed(2)}
-          </div>
-        </div>
       </div>
 
       {/* Missing items header + sort control */}
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm font-medium">Missing Items</div>
+        {/*
+          =========================================
+          COLLECTION STRATEGY TIP
+          -----------------------------------------
+          Purpose:
+          - Guides user on what to prioritize
+          - Makes app feel intelligent, not just data display
+          =========================================
+          */}
+          <div className="mt-2 rounded-xl border border-yellow-400/20 bg-yellow-400/10 px-3 py-2 text-xs text-yellow-200">
+            Focus on high-value or rare items first to increase your collection value faster.
+          </div>
 
         {/* Missing sort form
             Submits through dashboard query params so sorting stays server-side
@@ -290,15 +356,17 @@ export default function SetCompletionCard({
       <div className="mt-2 text-xs text-white/45">
         Sorted by importance ({getMissingSortLabel(missingSort)})
       </div>
+      
+  
 
-      {/* Missing items list */}
+            {/* Missing items list */}
       <div className="mt-3 max-h-96 space-y-2 overflow-y-auto pr-1">
         {missingItems.length === 0 ? (
           <div className="rounded-lg border border-green-400/20 bg-green-400/10 px-3 py-3 text-sm text-green-300">
             No missing items found — this set may be complete.
           </div>
         ) : (
-          missingItems.map((item) => (
+          visibleMissingItems.map((item) => (
             <div
               key={item.id}
               className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm"
@@ -328,17 +396,45 @@ export default function SetCompletionCard({
                   ${Number(item.price ?? 0).toFixed(2)}
                 </span>
 
-                <a
-                 href={`/dashboard?cid=${encodeURIComponent(activeCollectionId || "")}&catalog=${encodeURIComponent(item.name)}#collection-tools`}
-                  className="rounded-lg border border-blue-400/30 bg-blue-500/10 px-3 py-1 text-xs text-blue-300 hover:bg-blue-500/20"
-                >
-                  Search
-                </a>
-                </div>
+                {/*
+                  =========================================
+                  MISSING ITEM CATALOG SHORTCUT
+                  -----------------------------------------
+                  Purpose:
+                  - Sends the user back to the dashboard catalog tools
+                  - Pre-fills the catalog search with this missing item's name
+                  - Keeps the current collection selected using cid
+                  - Makes the action clearer than a generic "Search" label
+                  =========================================
+                  */}
+                  <a
+                    href={`/dashboard?cid=${encodeURIComponent(
+                      activeCollectionId
+                    )}&catalog=${encodeURIComponent(item.name)}#collection-tools`}
+                    className="rounded-lg border border-blue-400/30 bg-blue-500/10 px-3 py-1 text-xs text-blue-300 transition hover:bg-blue-500/20"
+                  >
+                    Find in Catalog
+                  </a>
+              </div>
             </div>
           ))
         )}
       </div>
-    </div>
+
+      {/*
+      =========================================
+      SHOW MESSAGE IF LIST IS TRUNCATED
+      -----------------------------------------
+      Purpose:
+      - Let user know only top items are shown
+      - Reinforces importance-based sorting
+      =========================================
+      */}
+      {missingItems.length > 15 && (
+        <div className="mt-2 text-center text-xs text-white/50">
+          Showing top 15 most important missing items
+        </div>
+      )}
+          </div>
   );
 }

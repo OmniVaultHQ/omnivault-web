@@ -569,11 +569,33 @@ export default function CollectionItemsSection({
                       </div>
 
                       <div className="mt-2 text-white/45">Profit / Loss</div>
-                      <div
-                        className={`font-semibold ${getProfitLossTextClass(rowProfitLoss)}`}
-                      >
-                        {formatProfitLoss(rowProfitLoss)}
-                      </div>
+                      {/*
+                        =========================================
+                        PROFIT / LOSS DISPLAY (ENHANCED)
+                        -----------------------------------------
+                        Purpose:
+                        - Make gains/losses visually obvious
+                        - Add background + color feedback
+                        - Feels like investing dashboard
+                        =========================================
+                        */}
+                        <div
+                          className={`mt-1 rounded-md px-2 py-1 text-xs font-semibold inline-block
+                            ${
+                              rowProfitLoss == null
+                                ? "bg-white/5 text-white/40"
+                                : rowProfitLoss > 0
+                                ? "bg-green-500/15 text-green-400 border border-green-400/20"
+                                : rowProfitLoss < 0
+                                ? "bg-red-500/15 text-red-400 border border-red-400/20"
+                                : "bg-white/10 text-white/60"
+                            }
+                          `}
+                        >
+                          {rowProfitLoss == null
+                            ? "No cost basis"
+                            : `${rowProfitLoss >= 0 ? "+" : ""}$${rowProfitLoss.toFixed(2)}`}
+                        </div>
                     </div>
                   </div>
 

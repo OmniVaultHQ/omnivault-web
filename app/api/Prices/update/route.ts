@@ -1,49 +1,39 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { updatePricesForItems } from "@/lib/prices";
+import { refreshStaleOwnedItems } from "@/lib/prices";
 
 /*
-File: app/api/prices/update/route.ts
+File: app/api/Prices/update/route.ts
 
 Purpose:
-- Refresh prices for all imported catalog items
-- Uses the existing pricing engine in lib/prices.ts
+- Refresh market prices for catalog items that are in someone's collection
+  and haven't been priced recently (see refreshStaleOwnedItems)
+
+Optional JSON body:
+- { "force": true }        -> ignore staleness (re-price everything owned)
+- { "staleHours": 6 }      -> custom staleness window
+- { "limit": 50 }          -> max items this run
 */
-export async function POST() {
+export async function POST(request: Request) {
   try {
-    /*
-    Step 1:
-    Load all imported catalog item IDs
-    */
-    const items = await prisma.item.findMany({
-      where: {
-        isCustom: false,
-      },
-      select: {
-        id: true,
-      },
+    const body = (await request.json().catch(() => ({}))) as {
+      force?: boolean;
+      staleHours?: number;
+      limit?: number;
+    };
+
+    const outcome = await refreshStaleOwnedItems({
+      staleHours: body.force ? 0 : body.staleHours,
+      limit: body.limit,
     });
 
-    const itemIds = items.map((item) => item.id);
-
-    /*
-    Step 2:
-    Run your existing pricing engine
-    */
-    const results = await updatePricesForItems(itemIds);
-
-    /*
-    Step 3:
-    Return success
-    */
     return NextResponse.json({
       success: true,
-      updatedCount: itemIds.length,
-      results,
+      updatedCount: outcome.checked,
+      summary: outcome.summary,
+      results: outcome.results,
     });
   } catch (error) {
     console.error("PRICE UPDATE ERROR:", error);
-
     return NextResponse.json(
       {
         success: false,

@@ -904,24 +904,45 @@ function getEffectiveMarketPrice(item: CollectionItemWithItem) {
   // DASHBOARD STATS (PORTFOLIO SUMMARY)
   // ==================================================
 
-  // Number of distinct collection rows
-  const totalUnique = items.length;
+  /*
+    Dashboard summary should reflect the currently loaded collection rows.
 
-  // Sum of all quantities owned
-  const totalOwned = items.reduce((sum, i) => sum + (i.quantity ?? 0), 0);
+    Why this exists:
+    - keeps the summary cards in sync with the active collection
+    - avoids confusion if we later change how rows are filtered or loaded
+    - makes all summary math use one consistent source
+    */
+    const summaryRows = filtered;
+    /*
+    Number of distinct owned rows
+    */
+    const totalUnique = summaryRows.length;
 
-  // Total market value of the active collection
-  const collectionValue = items.reduce((sum, i) => {
-    return sum + getRowMarketTotal(i);
-  }, 0);
+    /*
+    Sum of all owned quantity
+    */
+    const totalOwned = summaryRows.reduce((sum, row) => {
+      return sum + (row.quantity ?? 0);
+    }, 0);
 
-  // Total amount paid (purchasePrice * qty)
-  const costBasis = items.reduce((sum, i) => {
-    return sum + getRowPurchaseTotal(i);
-  }, 0);
+    /*
+    Total current market value
+    */
+    const collectionValue = summaryRows.reduce((sum, row) => {
+      return sum + getRowMarketTotal(row);
+    }, 0);
 
-  // Profit/loss across the full collection
-  const totalProfitLoss = collectionValue - costBasis;
+    /*
+    Total amount paid
+    */
+    const costBasis = summaryRows.reduce((sum, row) => {
+      return sum + getRowPurchaseTotal(row);
+    }, 0);
+
+    /*
+    Portfolio profit / loss
+    */
+    const totalProfitLoss = collectionValue - costBasis;
 
   /* ============================================================
    COLLECTION PERFORMANCE CALCULATION
@@ -1194,6 +1215,53 @@ if (chartLabels.length === 0) {
     .filter((m) => m.change < 0)
     .sort((a, b) => a.change - b.change)
     .slice(0, 5);
+
+      /*
+        =========================================
+        PROFIT-BASED LEADERBOARD
+        -----------------------------------------
+        Purpose:
+        - Shows best and worst investments based on
+          purchase cost vs current market value
+        - Different from price movers:
+          price movers track market change
+          profit leaderboard tracks your own gain/loss
+        =========================================
+        */
+        const profitItems = items
+          .map((row) => {
+            const market = getRowMarketTotal(row);
+            const cost = getRowPurchaseTotal(row);
+
+            /*
+            Skip rows with no cost basis.
+            If cost is 0, we cannot measure real investment performance.
+            */
+            if (cost === 0) return null;
+
+            return {
+              id: row.id,
+              name: row.item.name,
+              profit: market - cost,
+            };
+          })
+          .filter(
+            (x): x is { id: string; name: string; profit: number } => Boolean(x)
+          );
+
+        /*
+        Best investments first
+        */
+        const topProfitItems = [...profitItems]
+          .sort((a, b) => b.profit - a.profit)
+          .slice(0, 3);
+
+        /*
+        Worst investments first
+        */
+        const worstProfitItems = [...profitItems]
+          .sort((a, b) => a.profit - b.profit)
+          .slice(0, 3);
 
     // ==================================================
   // SET COMPLETION
@@ -1513,6 +1581,8 @@ const missingValue = sortedMissingItems.reduce(
           topGainers={topGainers}
           topLosers={topLosers}
           topValuableItems={topValuableItems}
+          topProfitItems={topProfitItems}
+          worstProfitItems={worstProfitItems}
         />
         <div className="mt-6">
           <CollectionValueBreakdown collections={collectionTotals} />

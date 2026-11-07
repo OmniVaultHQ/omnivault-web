@@ -38,6 +38,21 @@ type PriceEntry = {
 const STALE_AFTER_DAYS = 7;
 
 /*
+Format a market-data date as "Oct 15, 2026" in UTC.
+Provider dates are date-only (stored as midnight UTC); formatting in local time
+would show the previous day in US time zones, and server vs browser time zones
+would disagree during hydration.
+*/
+function formatDataDate(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/*
 One owned collection row plus linked item data
 
 IMPORTANT:
@@ -280,7 +295,7 @@ export default function CollectionItemsSection({
     if (quality.sampleSize) parts.push(`${quality.sampleSize} listings`);
     if (quality.dataDate) {
       parts.push(
-        `data from ${quality.dataDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${quality.isStale ? " (stale)" : ""}`
+        `data from ${formatDataDate(quality.dataDate)}${quality.isStale ? " (stale)" : ""}`
       );
     }
     return parts.length > 0 ? parts.join(" · ") : null;
@@ -291,7 +306,7 @@ export default function CollectionItemsSection({
     if (!quality) return null;
 
     const dataDateLabel = quality.dataDate
-      ? quality.dataDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      ? formatDataDate(quality.dataDate)
       : null;
 
     return (

@@ -28,7 +28,8 @@ type MissingItem = {
   name: string;
   rarity?: string | null;
   itemNumber?: string | null;
-  price?: number;
+  // null = no provider price saved yet (never a guess)
+  price?: number | null;
 };
 
 type Props = {
@@ -107,6 +108,9 @@ export default function SetCompletionCard({
   Prevents runtime crashes if undefined sneaks through.
   */
   const safeMissingValue = Number(missingValue ?? 0);
+
+  // Missing items that have no real price yet (excluded from the total)
+  const unpricedMissingCount = missingItems.filter((item) => item.price == null).length;
 
   /*
   Calculate how many unique items are still missing
@@ -286,7 +290,7 @@ export default function SetCompletionCard({
           -----------------------------------------
           Purpose:
           - Shows the estimated total value of all missing items
-          - This is based on saved prices or fallback rarity pricing
+          - Only sums missing items that have a real saved price
           - Clearer than calling it "Missing Value"
           =========================================
           */}
@@ -300,7 +304,9 @@ export default function SetCompletionCard({
             </div>
 
             <div className="mt-1 text-xs text-white/40">
-              Estimated total value of missing items
+              {unpricedMissingCount > 0
+                ? `Priced cards only (${unpricedMissingCount} without a price yet)`
+                : "Estimated total value of missing items"}
             </div>
           </div>
       </div>
@@ -392,9 +398,13 @@ export default function SetCompletionCard({
 
               {/* Right side: price + search */}
               <div className="flex shrink-0 items-center gap-3">
-                <span className="text-sm font-semibold text-yellow-300">
-                  ${Number(item.price ?? 0).toFixed(2)}
-                </span>
+                {item.price != null ? (
+                  <span className="text-sm font-semibold text-yellow-300">
+                    ${item.price.toFixed(2)}
+                  </span>
+                ) : (
+                  <span className="text-xs text-white/40">No price yet</span>
+                )}
 
                 {/*
                   =========================================

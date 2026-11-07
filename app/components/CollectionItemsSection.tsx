@@ -201,24 +201,6 @@ export default function CollectionItemsSection({
   }
 
   /*
-  Fallback market price for catalog items.
-
-  Why this exists:
-  - newly added catalog items may not have a saved ItemPrice row yet
-  - we still want owned cards to show value immediately
-  - this keeps the row display consistent with set completion fallback logic
-  */
-  function getFallbackMarketPrice(row: CollectionRow) {
-    const rarity = row.item.rarity?.toLowerCase() ?? "";
-
-    if (rarity.includes("holo")) return 50;
-    if (rarity.includes("rare")) return 25;
-    if (rarity.includes("uncommon")) return 5;
-
-    return 1;
-  }
-
-  /*
   Active displayed market price source.
 
   Priority:
@@ -226,7 +208,7 @@ export default function CollectionItemsSection({
   2. Row-level synced price source
   3. Catalog/shared history source
   4. Purchase fallback
-  5. Rarity fallback
+  5. None (no price yet; never a rarity guess)
   */
   function getActivePriceSource(row: CollectionRow) {
     if (isManualPriceLocked(row) && getManualMarketPrice(row) !== null) {
@@ -245,7 +227,7 @@ export default function CollectionItemsSection({
       return "purchase fallback";
     }
 
-    return "rarity fallback";
+    return "none";
   }
 
   /*
@@ -264,22 +246,17 @@ export default function CollectionItemsSection({
   1. manual market price on collection row
   2. latest catalog/shared price
   3. purchase price fallback
-  4. rarity-based fallback
+  Otherwise null (no price yet)
   */
-  function getEffectiveMarketPrice(row: CollectionRow) {
-    const manual = getManualMarketPrice(row);
-    const catalog = getCatalogMarketPrice(row);
-    const purchase = getPurchasePrice(row);
-    const fallback = getFallbackMarketPrice(row);
-
-    return manual ?? catalog ?? purchase ?? fallback;
+  function getEffectiveMarketPrice(row: CollectionRow): number | null {
+    return getManualMarketPrice(row) ?? getCatalogMarketPrice(row) ?? getPurchasePrice(row);
   }
 
   /*
   Total market value for this row
   */
   function getRowMarketTotal(row: CollectionRow) {
-    return getEffectiveMarketPrice(row) * row.quantity;
+    return (getEffectiveMarketPrice(row) ?? 0) * row.quantity;
   }
 
   /*
@@ -334,7 +311,7 @@ export default function CollectionItemsSection({
       case "rarity fallback":
         return "Rarity Fallback";
       case "none":
-        return "No Source";
+        return "No price yet";
       default:
         return source;
     }
@@ -670,7 +647,7 @@ export default function CollectionItemsSection({
 
                   <div className="ml-auto flex flex-col items-end gap-1 text-right text-[11px]">
                     <div className="text-white/40">
-                      Market used: ${effectiveMarketPrice.toFixed(2)} each
+                      {effectiveMarketPrice != null ? `Market used: $${effectiveMarketPrice.toFixed(2)} each` : "No market price yet"}
                     </div>
 
                     <div
@@ -784,7 +761,7 @@ export default function CollectionItemsSection({
                       <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                         <div className="text-white/45">Market Price</div>
                         <div className="mt-1 font-medium">
-                          ${effectiveMarketPrice.toFixed(2)}
+                          {effectiveMarketPrice != null ? `$${effectiveMarketPrice.toFixed(2)}` : "—"}
                         </div>
                       </div>
 
@@ -804,7 +781,7 @@ export default function CollectionItemsSection({
 
                     <div className="mt-2 space-y-1 text-[11px]">
                       <div className="text-white/40">
-                        Market used: ${effectiveMarketPrice.toFixed(2)} each
+                        {effectiveMarketPrice != null ? `Market used: $${effectiveMarketPrice.toFixed(2)} each` : "No market price yet"}
                       </div>
 
                       <div

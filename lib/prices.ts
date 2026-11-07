@@ -14,6 +14,9 @@ Safety rules before a price is saved:
 */
 
 const MAX_JUMP_RATIO = 5;
+
+// ItemPrice sources that are not real market data from a provider
+const NON_PROVIDER_SOURCES = ["manual", "simulated", "estimated-rarity"];
 const DEFAULT_STALE_HOURS = 12;
 const DEFAULT_BATCH_LIMIT = 200;
 
@@ -58,16 +61,17 @@ export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome
 
   const nextPrice = roundPrice(result.marketPrice);
 
+  // Baseline = last price from a real provider. Older rows may hold manual,
+  // simulated or rarity-guess values; those must not decide what is "suspicious".
   const latestPrice = await prisma.itemPrice.findFirst({
-    where: { itemId },
+    where: { itemId, source: { notIn: NON_PROVIDER_SOURCES } },
     orderBy: { createdAt: "desc" },
     select: { marketPrice: true, source: true },
   });
 
-  // Sanity guard against wrong matches (only compares against real prices)
+  // Sanity guard against wrong matches
   if (
     latestPrice &&
-    latestPrice.source !== "simulated" &&
     latestPrice.marketPrice > 0 &&
     result.confidence !== "high"
   ) {

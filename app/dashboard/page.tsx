@@ -88,66 +88,6 @@ function makeSafeFileName(originalName: string) {
 }
 
 /**
- * Estimate a starter market price from rarity.
- *
- * Why this exists:
- * - newly imported catalog items may not have real saved prices yet
- * - we still want new owned items to have a usable starting value
- * - this value can later be replaced by simulated or real API pricing
- */
-function getFallbackPriceFromRarity(rarity?: string | null) {
-  const value = rarity?.toLowerCase() ?? "";
-
-  if (value.includes("holo")) return 50;
-  if (value.includes("rare")) return 25;
-  if (value.includes("uncommon")) return 5;
-
-  return 1;
-}
-
-/**
- * Ensure an item has at least one saved ItemPrice row.
- *
- * What this does:
- * - checks if price history already exists
- * - if not, creates a starter estimated price row
- *
- * Important:
- * - does NOT overwrite real/manual prices
- * - only creates the first saved price if none exists
- */
-async function ensureItemHasStarterPrice(itemId: string): Promise<void> {
-  const existingPrice = await prisma.itemPrice.findFirst({
-    where: { itemId },
-    select: { id: true },
-  });
-
-  // ✅ If already has price → STOP
-  if (existingPrice) return;
-
-  const item = await prisma.item.findUnique({
-    where: { id: itemId },
-    select: {
-      id: true,
-      rarity: true,
-    },
-  });
-
-  // ✅ Only stop if item DOES NOT exist
-  if (!item) return;
-
-  const estimatedPrice = getFallbackPriceFromRarity(item.rarity);
-
-  await prisma.itemPrice.create({
-    data: {
-      itemId: item.id,
-      marketPrice: estimatedPrice,
-      source: "estimated-rarity",
-    },
-  });
-}
-
-/**
  * Type for one collection row plus:
  * - linked item
  * - linked item price history
@@ -262,6 +202,13 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
 
   const session = await auth();
   if (!session?.user?.id) return;
+
+  // Only allow adding to a collection this user owns
+  const ownedCollection = await prisma.collection.findFirst({
+    where: { id: collectionId, userId: session.user.id },
+    select: { id: true },
+  });
+  if (!ownedCollection) return;
 
   await prisma.collectionItem.upsert({
     where: {
@@ -385,6 +332,13 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
     // Basic validation
     if (!game || !set || !name || !selectedCollectionId) return;
 
+    // Only allow adding to a collection this user owns
+    const ownedCollection = await prisma.collection.findFirst({
+      where: { id: selectedCollectionId, userId },
+      select: { id: true },
+    });
+    if (!ownedCollection) return;
+
     // Final image URL can come from:
     // 1. manually pasted URL
     // 2. uploaded image file saved to /public/uploads
@@ -478,8 +432,6 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
     quantity: { increment: quantity },
   },
 });
-    // Make sure the item has a starter saved price for charts/history/value tracking
-      await ensureItemHasStarterPrice(item.id);
 
     revalidatePath("/dashboard");
     redirect(`/dashboard?cid=${selectedCollectionId}&view=${currentView}`);
@@ -495,8 +447,9 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
     const id = String(formData.get("id") ?? "").trim();
     if (!id) return;
 
-    await prisma.collectionItem.delete({
-      where: { id },
+    // deleteMany scoped by userId so users can only delete their own rows
+    await prisma.collectionItem.deleteMany({
+      where: { id, userId },
     });
 
     revalidatePath("/dashboard");
@@ -515,8 +468,8 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
 
     const quantity = Number.isFinite(raw) ? Math.max(1, raw) : 1;
 
-    await prisma.collectionItem.update({
-      where: { id },
+    await prisma.collectionItem.updateMany({
+      where: { id, userId },
       data: { quantity },
     });
 
@@ -536,8 +489,8 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
 
     const parsed = raw === "" ? null : Number(raw);
 
-    await prisma.collectionItem.update({
-      where: { id },
+    await prisma.collectionItem.updateMany({
+      where: { id, userId },
       data: {
         purchasePrice:
           parsed !== null && Number.isFinite(parsed) ? parsed : null,
@@ -548,10 +501,7 @@ const missingSort = normalizeStr(sp?.missingSort).trim().toLowerCase() || "price
   }
 
   /**
- * Save manual market price
- *
- * Also creates an ItemPrice history row
- * so chart/history components update too.
+ * Save manual market price (on this user's row only)
  *
  * We also save:
  * - priceSource = "manual"
@@ -571,8 +521,8 @@ async function saveMarketPrice(formData: FormData): Promise<void> {
   const safeMarketPrice =
     parsed !== null && Number.isFinite(parsed) ? parsed : null;
 
-  const collectionRow = await prisma.collectionItem.findUnique({
-    where: { id },
+  const collectionRow = await prisma.collectionItem.findFirst({
+    where: { id, userId },
     select: {
       id: true,
       itemId: true,
@@ -601,16 +551,8 @@ async function saveMarketPrice(formData: FormData): Promise<void> {
     },
   });
 
-  // Also store a history row so charts can use it later
-  if (safeMarketPrice !== null) {
-    await prisma.itemPrice.create({
-      data: {
-        itemId: collectionRow.itemId,
-        marketPrice: safeMarketPrice,
-        source: "manual",
-      },
-    });
-  }
+  // Manual prices stay on this user's row only. ItemPrice history is shared
+  // by every user who owns this catalog item, so it holds provider prices only.
 
   revalidatePath("/dashboard");
 }
@@ -633,8 +575,8 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
 
-  await prisma.collectionItem.update({
-    where: { id },
+  await prisma.collectionItem.updateMany({
+    where: { id, userId },
     data: {
       marketPrice: null,
       priceSource: null,
@@ -676,8 +618,8 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
       ? parsedMarket
       : null;
 
-  const collectionRow = await prisma.collectionItem.findUnique({
-    where: { id },
+  const collectionRow = await prisma.collectionItem.findFirst({
+    where: { id, userId },
     select: {
       id: true,
       itemId: true,
@@ -710,19 +652,8 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
     },
   });
 
-  /*
-  If a manual market price was entered, also save a history row
-  so charts and price history continue to work.
-  */
-  if (safeMarketPrice !== null) {
-    await prisma.itemPrice.create({
-      data: {
-        itemId: collectionRow.itemId,
-        marketPrice: safeMarketPrice,
-        source: "manual",
-      },
-    });
-  }
+  // Manual prices stay on this user's row only. ItemPrice history is shared
+  // by every user who owns this catalog item, so it holds provider prices only.
 
   revalidatePath("/dashboard");
 }
@@ -766,14 +697,14 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
    * Manual market price saved on collection row
    */
   function getManualMarketPrice(item: CollectionItemWithItem) {
-    return (item as any).marketPrice ?? null;
+    return item.marketPrice ?? null;
   }
 
   /**
    * Purchase price saved on collection row
    */
   function getPurchasePrice(item: CollectionItemWithItem) {
-    return (item as any).purchasePrice ?? null;
+    return item.purchasePrice ?? null;
   }
 
   /**
@@ -784,55 +715,32 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
  * - tcgplayer
  */
 function getPriceSource(item: CollectionItemWithItem) {
-  return (item as any).priceSource ?? null;
+  return item.priceSource ?? null;
 }
 
 /**
  * When the current collection row market price was last updated
  */
 function getLastPriceUpdated(item: CollectionItemWithItem) {
-  return (item as any).lastPriceUpdated ?? null;
-}
-
-  /**
- * Fallback market pricing for catalog items
- *
- * Why this exists:
- * - imported catalog items may not have saved ItemPrice rows yet
- * - set completion already uses fallback pricing
- * - owned collection cards should use similar logic so they do not stay at $0
- */
-function getFallbackMarketPrice(item: CollectionItemWithItem) {
-  const rarity = item.item.rarity?.toLowerCase() ?? "";
-
-  if (rarity.includes("holo")) return 50;
-  if (rarity.includes("rare")) return 25;
-  if (rarity.includes("uncommon")) return 5;
-
-  return 1;
+  return item.lastPriceUpdated ?? null;
 }
 
 /**
  * Effective market price priority:
- * 1. manual market price on collection row
- * 2. latest saved catalog/shared price
- * 3. purchase price fallback
- * 4. rarity-based fallback price
+ * 1. market price on the owned row (manual override or last synced provider price)
+ * 2. latest saved catalog price from a provider
+ * 3. purchase price (shown in the UI as "Purchase Fallback")
+ * Otherwise null: the item has no price yet. Never invent one (no rarity guesses).
  */
-function getEffectiveMarketPrice(item: CollectionItemWithItem) {
-  const manual = getManualMarketPrice(item);
-  const catalog = getCatalogMarketPrice(item);
-  const purchase = getPurchasePrice(item);
-  const fallback = getFallbackMarketPrice(item);
-
-  return manual ?? catalog ?? purchase ?? fallback;
+function getEffectiveMarketPrice(item: CollectionItemWithItem): number | null {
+  return getManualMarketPrice(item) ?? getCatalogMarketPrice(item) ?? getPurchasePrice(item);
 }
 
   /**
    * Total market value for this row
    */
   function getRowMarketTotal(item: CollectionItemWithItem) {
-    return getEffectiveMarketPrice(item) * item.quantity;
+    return (getEffectiveMarketPrice(item) ?? 0) * item.quantity;
   }
 
   /**
@@ -1420,38 +1328,17 @@ if (chartLabels.length === 0) {
     : [];
 
 /*
-Convert DB result into clean UI format
-and apply fallback pricing if real price is missing.
+Convert DB result into clean UI format.
+Missing items without a saved provider price get price: null (unknown),
+never a rarity-based guess.
 */
-const formattedMissingItems = missingItems.map((item) => {
-  const latestPrice = item.prices?.[0]?.marketPrice;
-
-  /*
-  Fallback pricing system
-
-  Why:
-  - not all catalog items have saved price history yet
-  - we still want missing-item prioritization to feel useful
-  */
-  let fallbackPrice = 0;
-
-  if (latestPrice == null) {
-    const rarity = item.rarity?.toLowerCase() ?? "";
-
-    if (rarity.includes("holo")) fallbackPrice = 50;
-    else if (rarity.includes("rare")) fallbackPrice = 25;
-    else if (rarity.includes("uncommon")) fallbackPrice = 5;
-    else fallbackPrice = 1;
-  }
-
-  return {
-    id: item.id,
-    name: item.name,
-    rarity: item.rarity,
-    itemNumber: item.itemNumber,
-    price: latestPrice ?? fallbackPrice,
-  };
-});
+const formattedMissingItems = missingItems.map((item) => ({
+  id: item.id,
+  name: item.name,
+  rarity: item.rarity,
+  itemNumber: item.itemNumber,
+  price: item.prices?.[0]?.marketPrice ?? null,
+}));
 
 /*
 Helper for rarity sorting

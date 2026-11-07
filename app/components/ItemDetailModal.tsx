@@ -24,7 +24,8 @@ type ItemDetailModalItem = {
   purchasePrice: number | null;
   manualMarketPrice: number | null;
   catalogMarketPrice: number | null;
-  effectiveMarketPrice: number;
+  // null = no price yet (no provider price, manual price or purchase price)
+  effectiveMarketPrice: number | null;
   totalValue: number;
   totalCost: number;
   profitLoss: number | null;
@@ -243,7 +244,9 @@ export default function ItemDetailModal({
                   Market Price
                 </div>
                 <div className="mt-2 text-2xl font-semibold">
-                  ${Number(item.effectiveMarketPrice ?? 0).toFixed(2)}
+                  {item.effectiveMarketPrice != null
+                    ? `$${item.effectiveMarketPrice.toFixed(2)}`
+                    : "No price yet"}
                 </div>
                 <div className="mt-1 text-xs text-white/50">
                   Source: {item.activePriceSource ?? "Unknown"}
@@ -319,7 +322,9 @@ export default function ItemDetailModal({
                   Effective Market Price Used
                 </div>
                 <div className="mt-2 text-3xl font-semibold">
-                  ${item.effectiveMarketPrice.toFixed(2)}
+                  {item.effectiveMarketPrice != null
+                    ? `$${item.effectiveMarketPrice.toFixed(2)}`
+                    : "No price yet"}
                 </div>
 
                 <div className="mt-2 space-y-1 text-sm text-white/55">
@@ -418,7 +423,7 @@ export default function ItemDetailModal({
                     This item is using a locked manual market price.
                   </div>
                   <div className="mt-1 text-xs text-amber-200/70">
-                    Use auto pricing again to let refresh pull simulated or provider prices.
+                    Use auto pricing again to let refresh pull provider prices.
                   </div>
 
                   <form action={useAutoPriceAgain} className="mt-3">

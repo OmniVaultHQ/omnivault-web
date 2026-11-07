@@ -16,7 +16,7 @@ type TopValuableItem = {
   id: string;
   name: string;
   quantity: number;
-  displayPrice: number;
+  displayPrice: number | null;
   totalValue: number;
 };
 
@@ -250,7 +250,10 @@ export default function PortfolioAnalytics({
                     #{index + 1} {item.name}
                   </div>
                   <div className="text-xs text-white/55">
-                    Qty: {item.quantity} • ${item.displayPrice.toFixed(2)} each
+                    Qty: {item.quantity} •{" "}
+                    {item.displayPrice != null
+                      ? `$${item.displayPrice.toFixed(2)} each`
+                      : "No price yet"}
                   </div>
                 </div>
 

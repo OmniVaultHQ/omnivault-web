@@ -8,6 +8,7 @@ import { getOrCreateDefaultCollection } from "@/lib/collections";
 
 import SubmitButton from "@/app/components/Submitbutton";
 import { updatePricesForItems } from "@/lib/prices";
+import { filterTrustedHistory } from "@/lib/price-history";
 import PortfolioSummaryCards from "@/app/components/PortfolioSummaryCards";
 import DashboardHeader from "@/app/components/DashboardHeader";
 import CollectionControls from "@/app/components/CollectionControls";
@@ -665,9 +666,12 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
   /**
    * Load collection items
    *
-   * Includes newest 10 price history rows for each linked item
+   * Includes the newest 10 trusted price history rows for each linked item.
+   * More rows are loaded, then filtered with filterTrustedHistory so history,
+   * "Change" and catalog price skip manual/simulated rows and eBay prices
+   * that were overruled by a recent TCGplayer price.
    */
-  const items: CollectionItemWithItem[] = await prisma.collectionItem.findMany({
+  const rawItems: CollectionItemWithItem[] = await prisma.collectionItem.findMany({
     where: isMainCollection ? { userId } : { collectionId: activeCollectionId },
     orderBy: { id: "desc" },
     include: {
@@ -675,12 +679,20 @@ async function useAutoPriceAgain(formData: FormData): Promise<void> {
         include: {
           prices: {
             orderBy: { lastUpdated: "desc" },
-            take: 10,
+            take: 50,
           },
         },
       },
     },
   });
+
+  const items: CollectionItemWithItem[] = rawItems.map((row) => ({
+    ...row,
+    item: {
+      ...row.item,
+      prices: filterTrustedHistory(row.item.prices).slice(0, 10),
+    },
+  }));
 
   // ==================================================
   // PRICE HELPERS
@@ -995,24 +1007,27 @@ const collectionTotals = collections
 
    How it works:
    1. Load all price history rows for items in the current view
-   2. Group rows by calendar day
-   3. For each day, keep the latest saved price per item
-   4. Multiply each item's latest price by owned quantity
-   5. Sum everything into one daily portfolio total
+   2. Keep only trusted rows (filterTrustedHistory: no manual/simulated
+      rows, no eBay prices overruled by a recent TCGplayer price)
+   3. Walk the days in order, carrying each item's last known price
+      forward so a day where only some items were priced doesn't count
+      the others as $0
+   4. Daily value = sum of (last known price x owned quantity)
+   Items with no price yet are left out (never guessed).
    ============================================================ */
 
-/* Track owned quantity per item so we can multiply price × quantity */
+/* Owned quantity per item (summed: the same item can be in several collections) */
 const quantityByItemId = new Map<string, number>();
 
 for (const row of items) {
-  quantityByItemId.set(row.item.id, row.quantity);
+  quantityByItemId.set(row.item.id, (quantityByItemId.get(row.item.id) ?? 0) + row.quantity);
 }
 
 /* Only load history for items currently shown */
-const currentItemIds = Array.from(new Set(items.map((i) => i.item.id)));
+const currentItemIds = Array.from(quantityByItemId.keys());
 
 /* Pull all saved price history rows for those items */
-const priceHistoryRows =
+const allPriceHistoryRows =
   currentItemIds.length > 0
     ? await prisma.itemPrice.findMany({
         where: {
@@ -1026,59 +1041,58 @@ const priceHistoryRows =
         select: {
           itemId: true,
           marketPrice: true,
+          source: true,
           createdAt: true,
+          lastUpdated: true,
         },
       })
     : [];
 
-/* Group price rows by readable day label */
-const rowsByDay = new Map<
-  string,
-  { itemId: string; marketPrice: number; createdAt: Date }[]
->();
+/* Apply the trusted-history rules per item */
+const historyRowsByItemId = new Map<string, typeof allPriceHistoryRows>();
+for (const row of allPriceHistoryRows) {
+  const list = historyRowsByItemId.get(row.itemId) ?? [];
+  list.push(row);
+  historyRowsByItemId.set(row.itemId, list);
+}
+
+const priceHistoryRows = Array.from(historyRowsByItemId.values())
+  .flatMap((rows) => filterTrustedHistory(rows))
+  .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+/* Group price rows by calendar day (ISO key keeps years apart and sorts correctly) */
+const rowsByDay = new Map<string, typeof priceHistoryRows>();
 
 for (const row of priceHistoryRows) {
-  const dayLabel = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(row.createdAt));
-
-  const existing = rowsByDay.get(dayLabel) ?? [];
+  const dayKey = new Date(row.createdAt).toISOString().slice(0, 10);
+  const existing = rowsByDay.get(dayKey) ?? [];
   existing.push(row);
-  rowsByDay.set(dayLabel, existing);
+  rowsByDay.set(dayKey, existing);
 }
 
 /* Final chart arrays */
 let chartLabels: string[] = [];
 let chartValues: number[] = [];
 
-/* For each day, keep only the newest saved price per item */
-for (const [dayLabel, dayRows] of rowsByDay.entries()) {
-  const latestPriceByItemId = new Map<
-    string,
-    { marketPrice: number; createdAt: Date }
-  >();
+/* Last known price per item, carried forward across days */
+const lastKnownPriceByItemId = new Map<string, number>();
 
-  for (const row of dayRows) {
-    const existing = latestPriceByItemId.get(row.itemId);
-
-    if (!existing || new Date(row.createdAt) > new Date(existing.createdAt)) {
-      latestPriceByItemId.set(row.itemId, {
-        marketPrice: row.marketPrice,
-        createdAt: row.createdAt,
-      });
-    }
+for (const dayKey of Array.from(rowsByDay.keys()).sort()) {
+  // Rows are in time order, so the last one per item wins for the day
+  for (const row of rowsByDay.get(dayKey) ?? []) {
+    lastKnownPriceByItemId.set(row.itemId, row.marketPrice);
   }
 
-  /* Sum daily portfolio value */
   let dailyPortfolioValue = 0;
-
-  for (const [itemId, latestPrice] of latestPriceByItemId.entries()) {
-    const quantity = quantityByItemId.get(itemId) ?? 0;
-    dailyPortfolioValue += latestPrice.marketPrice * quantity;
+  for (const [itemId, price] of lastKnownPriceByItemId.entries()) {
+    dailyPortfolioValue += price * (quantityByItemId.get(itemId) ?? 0);
   }
 
-  chartLabels.push(dayLabel);
+  chartLabels.push(
+    new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(
+      new Date(`${dayKey}T00:00:00Z`)
+    )
+  );
   chartValues.push(Number(dailyPortfolioValue.toFixed(2)));
 }
 
@@ -1321,7 +1335,7 @@ if (chartLabels.length === 0) {
           itemNumber: true,
           prices: {
             orderBy: { lastUpdated: "desc" },
-            take: 1,
+            take: 10,
           },
         },
       })
@@ -1329,15 +1343,15 @@ if (chartLabels.length === 0) {
 
 /*
 Convert DB result into clean UI format.
-Missing items without a saved provider price get price: null (unknown),
-never a rarity-based guess.
+Price = newest trusted provider price (same rules as owned cards).
+Missing items without one get price: null (unknown), never a rarity-based guess.
 */
 const formattedMissingItems = missingItems.map((item) => ({
   id: item.id,
   name: item.name,
   rarity: item.rarity,
   itemNumber: item.itemNumber,
-  price: item.prices?.[0]?.marketPrice ?? null,
+  price: filterTrustedHistory(item.prices ?? [])[0]?.marketPrice ?? null,
 }));
 
 /*

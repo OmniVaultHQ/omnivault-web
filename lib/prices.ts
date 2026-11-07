@@ -1,5 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { getBestProviderPrice, type PriceResult } from "@/lib/price-providers";
+import {
+  NON_PROVIDER_SOURCES,
+  SOURCE_TRUST,
+  TRUSTED_PRICE_MAX_AGE_MS,
+  getSourceTrust,
+} from "@/lib/price-history";
 
 /*
 File: lib/prices.ts
@@ -16,24 +22,6 @@ Safety rules before a price is saved:
 */
 
 const MAX_JUMP_RATIO = 5;
-
-// ItemPrice sources that are not real market data from a provider
-const NON_PROVIDER_SOURCES = ["manual", "simulated", "estimated-rarity"];
-/*
-How much each provider's price is trusted. A recent price from a higher-trust
-source is not replaced by a lower-trust one (see savePriceForItem).
-- tcgplayer: market price from actual sales
-- ebay: median of active listings (asking prices)
-*/
-const SOURCE_TRUST: Record<string, number> = {
-  tcgplayer: 3,
-  ebay: 1,
-};
-const TRUSTED_PRICE_MAX_AGE_HOURS = 7 * 24;
-
-function getSourceTrust(source: string): number {
-  return SOURCE_TRUST[source] ?? 0;
-}
 
 const DEFAULT_STALE_HOURS = 12;
 const DEFAULT_BATCH_LIMIT = 200;
@@ -87,7 +75,7 @@ export async function savePriceForItem(itemId: string): Promise<SavePriceOutcome
   with its real "last updated" time so the UI shows how old it is.
   */
   const resultTrust = getSourceTrust(result.source);
-  const trustedCutoff = new Date(Date.now() - TRUSTED_PRICE_MAX_AGE_HOURS * 60 * 60 * 1000);
+  const trustedCutoff = new Date(Date.now() - TRUSTED_PRICE_MAX_AGE_MS);
   const moreTrustedSources = Object.keys(SOURCE_TRUST).filter(
     (source) => getSourceTrust(source) > resultTrust
   );

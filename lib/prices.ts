@@ -5,6 +5,7 @@ import {
   SOURCE_TRUST,
   TRUSTED_PRICE_MAX_AGE_MS,
   getSourceTrust,
+  parseProviderDate,
 } from "@/lib/price-history";
 
 /*
@@ -32,17 +33,6 @@ const DEFAULT_BATCH_LIMIT = 200;
 function roundPrice(value: number) {
   return Number(value.toFixed(2));
 }
-
-/*
-Provider dates come in different formats (pokemontcg.io uses "2026/11/06").
-Returns null when missing or unparseable instead of saving a bad date.
-*/
-function parseProviderDate(value: string | null | undefined): Date | null {
-  if (!value) return null;
-  const parsed = new Date(value.replace(/\//g, "-"));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 export async function getPriceForItem(itemId: string): Promise<PriceResult | null> {
   const item = await prisma.item.findUnique({
     where: { id: itemId },

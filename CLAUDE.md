@@ -6,7 +6,7 @@ Read `docs/PROJECT_BRIEF.md` for the product vision, roadmap and development rul
 - No fake market data: if pricing fails, show unavailable/stale. Simulated prices only with `PRICING_ALLOW_SIMULATED=true` in local dev.
 - Never delete user collections, inventory or price history without explicit permission. Migrations must preserve data.
 - Keep API credentials server-side. Avoid `any`.
-- Verify with `npx tsc --noEmit` and `npx eslint <files>`; there is no test suite yet.
+- Verify with `npm test` (Vitest, pricing tests in `lib/*.test.ts`), `npx tsc --noEmit` and `npx eslint <files>`. Add or update tests when changing pricing rules.
 - Record decisions and status in `docs/` (pricing audit: `docs/PRICING_AUDIT.md`).
 - pokemontcg.io (current Pokémon price source) is deprecated and stops working **March 1, 2027**; the plan is to move to Scrydex (paid) before launch. See the decision in `docs/PRICING_AUDIT.md`.
 

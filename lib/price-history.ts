@@ -28,6 +28,17 @@ export function getSourceTrust(source: string): number {
   return SOURCE_TRUST[source] ?? 0;
 }
 
+/*
+Provider dates come in different formats (pokemontcg.io uses "2026/11/06").
+Returns null when missing or unparseable instead of saving a bad date.
+Date-only values are read as midnight UTC.
+*/
+export function parseProviderDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const parsed = new Date(value.replace(/\//g, "-"));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 type HistoryRow = {
   source: string;
   createdAt: Date;

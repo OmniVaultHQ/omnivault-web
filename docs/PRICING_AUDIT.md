@@ -65,7 +65,15 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
 - **Decision: stay on free pokemontcg.io (keyless) + eBay for now.** Trust rules protect prices during outages.
 - **Deadline: switch to Scrydex (or another source) before launch, and no later than March 2027.** Before building it, review Scrydex docs and terms for commercial use/display. Add it as a `PRICE_PROVIDERS` entry above eBay and give `scrydex` a trust level in `lib/price-history.ts`.
 
-Next: Step D (tests).
+- **2026-11-07 — Step D**: Vitest 3.2.7 (`npm test`), 73 tests, ~0.5s, no network or DB:
+  - `lib/price-providers.test.ts` — title matching per category, card numbers, outliers/median, TCGplayer printing choice, item kinds
+  - `lib/price-providers.fallback.test.ts` — provider order, pokemontcg.io retries on 5xx and timeouts, eBay fallback, confidence by sample size, no-price instead of guessing, custom items never priced (fetch mocked)
+  - `lib/price-history.test.ts` — trust ranking, overruled/non-provider rows, 7-day window, date parsing
+  - `lib/prices.test.ts` — save rules: no-price, first save + owned-row sync (locked rows untouched), re-confirm bump, kept-trusted, 7-day expiry, 5x jump guard, high-confidence bypass, fake baselines ignored (in-memory Prisma fake)
+  - Checked the tests catch regressions: making eBay outrank TCGplayer and disabling the jump guard failed 7 tests.
+  - `npm audit`: tinypool advisory remains (dev-only, inside Vitest 3; fix requires Vitest 5). **Separately, Next.js 16.1.6 and @auth/core have critical advisories** — handle in production readiness.
+
+Pricing phase (roadmap phase 2) complete apart from the Scrydex switch.
 
 ## Proposed order of work
 

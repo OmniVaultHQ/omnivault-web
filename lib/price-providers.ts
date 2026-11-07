@@ -151,6 +151,34 @@ const NON_HOLO_VARIANT_ORDER = [
   "1stEditionHolofoil",
 ];
 
+/*
+Pick the TCGplayer printing to use and its price.
+Holo/ultra/secret rarities prefer holofoil printings, others prefer normal.
+Uses "market" (from sales, high confidence), else "mid" (medium confidence).
+*/
+export function selectTcgPlayerPrice(
+  prices: Record<string, TcgVariantPrice | undefined>,
+  rarityRaw: string
+): { marketPrice: number; confidence: PriceConfidence } | null {
+  const rarity = normalize(rarityRaw);
+  const order =
+    rarity.includes("holo") || rarity.includes("ultra") || rarity.includes("secret")
+      ? HOLO_VARIANT_ORDER
+      : NON_HOLO_VARIANT_ORDER;
+
+  for (const variant of order) {
+    const p = prices[variant];
+    const value = p?.market ?? p?.mid ?? null;
+    if (value != null && Number.isFinite(value) && value > 0) {
+      return {
+        marketPrice: roundPrice(value),
+        confidence: p?.market != null ? "high" : "medium",
+      };
+    }
+  }
+  return null;
+}
+
 async function getPokemonTcgPrice(item: PricingItem): Promise<PriceResult | null> {
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -200,25 +228,14 @@ async function getPokemonTcgPrice(item: PricingItem): Promise<PriceResult | null
     const prices = json.data?.tcgplayer?.prices;
     if (!prices) return null;
 
-    const rarity = normalize(json.data?.rarity ?? item.rarity ?? "");
-    const order = rarity.includes("holo") || rarity.includes("ultra") || rarity.includes("secret")
-      ? HOLO_VARIANT_ORDER
-      : NON_HOLO_VARIANT_ORDER;
+    const selected = selectTcgPlayerPrice(prices, json.data?.rarity ?? item.rarity ?? "");
+    if (!selected) return null;
 
-    for (const variant of order) {
-      const p = prices[variant];
-      const value = p?.market ?? p?.mid ?? null;
-      if (value != null && Number.isFinite(value) && value > 0) {
-        return {
-          marketPrice: roundPrice(value),
-          source: "tcgplayer",
-          confidence: p?.market != null ? "high" : "medium",
-          providerUpdatedAt: json.data?.tcgplayer?.updatedAt ?? null,
-        };
-      }
-    }
-
-    return null;
+    return {
+      ...selected,
+      source: "tcgplayer",
+      providerUpdatedAt: json.data?.tcgplayer?.updatedAt ?? null,
+    };
   } catch (error) {
     console.error("[pricing] pokemontcg.io failure:", error instanceof Error ? error.message : error);
     return null;
@@ -264,7 +281,7 @@ const KIND_EXCLUDED_TERMS: Record<ItemKind, string[]> = {
   other: [],
 };
 
-function getItemKind(item: PricingItem): ItemKind {
+export function getItemKind(item: PricingItem): ItemKind {
   const category = normalize(`${item.category ?? ""}`);
   if (isPokemon(item) || category.includes("card")) return "card";
   if (category.includes("video game") || category.includes("console") || category === "game" || category === "games") {
@@ -409,7 +426,7 @@ export function titleMatchesItem(rawTitle: string, item: PricingItem): boolean {
   return true;
 }
 
-function numberAppearsInTitle(itemNumber: string, normalizedTitle: string): boolean {
+export function numberAppearsInTitle(itemNumber: string, normalizedTitle: string): boolean {
   const num = normalize(itemNumber).replace(/\s+/g, "");
   if (!num) return true;
 
@@ -523,7 +540,7 @@ function normalize(value: string): string {
 Drop values outside 1.5x the interquartile range.
 Only applied with 4+ values; smaller samples are returned as-is.
 */
-function removeOutliers(values: number[]): number[] {
+export function removeOutliers(values: number[]): number[] {
   if (values.length < 4) return values;
   const sorted = [...values].sort((a, b) => a - b);
   const q1 = quantile(sorted, 0.25);
@@ -543,7 +560,7 @@ function quantile(sorted: number[], q: number): number {
     : sorted[base];
 }
 
-function getMedianPrice(values: number[]): number {
+export function getMedianPrice(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1

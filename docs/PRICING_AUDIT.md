@@ -58,6 +58,13 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
   - Verified by the user: second click 67 ms (nothing re-fetched); trust rule kept Charizard $954.65 and Blastoise $170.64 when pokemontcg.io failed. First click was 11.6s because of a 10s hang (fixed in `cc5e0e7`; live test 1.8–5s for 3 cards).
   - **Biggest remaining accuracy/speed risk: pokemontcg.io reliability.** Even with 3 attempts about half of lookups failed during testing. Options: free `POKEMON_TCG_API_KEY`, or a direct TCGplayer / PriceCharting provider.
 
+## Decision: Pokémon price source (2026-11-07)
+
+- **pokemontcg.io is deprecated** (dev.pokemontcg.io): no new registrations, so no API key can be obtained; existing keys work until **March 1, 2027**; users are told to migrate to Scrydex. This likely explains the random 5xx/timeouts and weeks-old TCGplayer data.
+- **Scrydex** (successor): paid only — Starter $29/mo (5,000 credits), Growth $99/mo (50,000). Keyless requests return 401. Needs `SCRYDEX_API_KEY` + `SCRYDEX_TEAM_ID`. Covers all TCGs, raw + graded prices, price history/trends, population reports; up to 100 cards per pricing request.
+- **Decision: stay on free pokemontcg.io (keyless) + eBay for now.** Trust rules protect prices during outages.
+- **Deadline: switch to Scrydex (or another source) before launch, and no later than March 2027.** Before building it, review Scrydex docs and terms for commercial use/display. Add it as a `PRICE_PROVIDERS` entry above eBay and give `scrydex` a trust level in `lib/price-history.ts`.
+
 Next: Step D (tests).
 
 ## Proposed order of work

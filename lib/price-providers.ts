@@ -137,12 +137,12 @@ async function getPokemonTcgPrice(item: PricingItem): Promise<PriceResult | null
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
+    // pokemontcg.io randomly returns 5xx on ~40% of calls (measured 2026-11-07),
+    // so try up to 3 times with backoff before falling back to eBay.
     let response = await doFetch();
-
-    // pokemontcg.io has frequent transient 5xx errors; retry once before
-    // falling back to the (less accurate) eBay asking-price provider.
-    if (response.status >= 500) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
+    for (const delayMs of [500, 1000]) {
+      if (response.status < 500) break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
       response = await doFetch();
     }
 

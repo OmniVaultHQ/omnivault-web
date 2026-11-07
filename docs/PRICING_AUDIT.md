@@ -40,6 +40,15 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
 7. **Provider routing is hardcoded**, and non-card categories get card-specific eBay filters. Adding PriceCharting or Gundam-specific logic means editing the router.
 8. **No tests** around `titleMatchesItem` / outlier logic, which decide price accuracy.
 
+## Progress log
+
+- **2026-11-07 — Step A done** (`625ebbd`): issues 1–4 fixed. Existing `estimated-rarity`/`manual` rows were left in place (none in the dev DB).
+- **2026-11-07 — Trusted-source rule** (`7ed990a`): a TCGplayer price from the last 7 days is kept over an eBay result (pokemontcg.io outages were swapping Charizard's $954.65 for eBay's $331). Re-confirmed prices bump `ItemPrice.lastUpdated`.
+- **2026-11-07 — pokemontcg.io retries** (`07c1e59`): measured ~40% random 5xx; now 3 attempts with backoff.
+- **2026-11-07 — Trusted history** (`b2a29b7`): `lib/price-history.ts` holds the shared trust rules; dashboard history, Change, movers, set completion and the portfolio chart skip overruled/non-provider rows. Chart now carries last known prices forward and sums quantity across collections. Verified by the user on the dashboard.
+
+Next: Step B.
+
 ## Proposed order of work
 
 - **Step A — correctness and safety (no schema change):** fixes 1–4. Stop creating starter prices; UI shows "No price yet" instead of a guess. Keep manual prices on the owned row only, and exclude `manual`/`estimated-rarity` from the jump-guard baseline. Require auth (session or `CRON_SECRET` header) on the update route. Optional, ask first: delete the existing `estimated-rarity` and `manual` ItemPrice rows.

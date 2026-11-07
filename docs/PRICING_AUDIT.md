@@ -51,6 +51,9 @@ Stack confirmed: Next.js 16.1.6, React 19.2.3, Prisma 6.19, NextAuth 5 beta. Dev
   - Finding: pokemontcg.io's TCGplayer data lags (gym2-2 `updatedAt` 2026/10/15 on 2026-11-07), so TCGplayer prices will often show as stale. That's accurate, not a bug. A direct TCGplayer or PriceCharting source would fix freshness.
   - **Schema workflow:** `dev.db` was built with `prisma db push` (no `_prisma_migrations` table; the 4 migration folders were never applied). Use `npx prisma db push` for dev changes. **Never run `prisma migrate dev` against it** — it will offer to reset (wipe) the DB. Before production (Postgres), create a fresh baseline migration from the current schema.
 
+  - Verified by the user on the dashboard after a refresh (all 3 cards: tcgplayer, high, data from Oct 15, 2026). Date labels fixed to UTC (`acae614`).
+  - Observed: dashboard refresh took 8.4s for 3 items (sequential + retries) — addressed in Step C.
+
 Next: Step C (provider registry, category-aware eBay filters, faster refresh) or Step D (tests).
 
 ## Proposed order of work

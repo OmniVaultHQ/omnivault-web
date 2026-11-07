@@ -48,6 +48,8 @@ export type PriceResult = {
 };
 
 const REQUEST_TIMEOUT_MS = 10_000;
+// Per attempt; pokemontcg.io normally answers in ~0.2s, so a hang is retried
+const POKEMON_TCG_ATTEMPT_TIMEOUT_MS = 3_000;
 
 /* =========================================================
    PROVIDER REGISTRY
@@ -159,21 +161,35 @@ async function getPokemonTcgPrice(item: PricingItem): Promise<PriceResult | null
       `https://api.pokemontcg.io/v2/cards/${encodeURIComponent(item.externalId!)}` +
       `?select=id,name,rarity,tcgplayer`;
 
-    const doFetch = () =>
-      fetch(url, {
-        headers,
-        cache: "no-store",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+    /*
+    pokemontcg.io is flaky (measured 2026-11-07): ~40% of calls return 5xx and
+    some hang until timeout, while good responses take ~0.2s. So each attempt
+    gets a short timeout, and both 5xx and timeouts are retried (3 attempts,
+    with backoff) before falling back to eBay.
+    Returns the response, or null when every attempt failed.
+    */
+    const fetchWithRetry = async (): Promise<Response | null> => {
+      let lastFailure = "";
+      for (const delayMs of [0, 500, 1000]) {
+        if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        try {
+          const response = await fetch(url, {
+            headers,
+            cache: "no-store",
+            signal: AbortSignal.timeout(POKEMON_TCG_ATTEMPT_TIMEOUT_MS),
+          });
+          if (response.status < 500) return response;
+          lastFailure = `HTTP ${response.status}`;
+        } catch (error) {
+          lastFailure = error instanceof Error ? error.name : String(error);
+        }
+      }
+      console.error(`[pricing] pokemontcg.io failed 3 times for ${item.externalId}: ${lastFailure}`);
+      return null;
+    };
 
-    // pokemontcg.io randomly returns 5xx on ~40% of calls (measured 2026-11-07),
-    // so try up to 3 times with backoff before falling back to eBay.
-    let response = await doFetch();
-    for (const delayMs of [500, 1000]) {
-      if (response.status < 500) break;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      response = await doFetch();
-    }
+    const response = await fetchWithRetry();
+    if (!response) return null;
 
     if (!response.ok) {
       console.error("[pricing] pokemontcg.io error:", response.status, item.externalId);
@@ -204,7 +220,7 @@ async function getPokemonTcgPrice(item: PricingItem): Promise<PriceResult | null
 
     return null;
   } catch (error) {
-    console.error("[pricing] pokemontcg.io failure:", error);
+    console.error("[pricing] pokemontcg.io failure:", error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -334,7 +350,7 @@ async function getPriceFromEbay(item: PricingItem): Promise<PriceResult | null> 
       sampleSize: trimmed.length,
     };
   } catch (error) {
-    console.error("[pricing] eBay failure:", error);
+    console.error("[pricing] eBay failure:", error instanceof Error ? error.message : error);
     return null;
   }
 }
